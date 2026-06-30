@@ -42,3 +42,12 @@ node_modules/
 # DB Data
 /generated/prisma
 *.env
+
+# Build
+dist/
+coverage/
+*.tsbuildinfo
+
+# Prisma generated files
+src/generated/prisma/
+generated/prisma/
