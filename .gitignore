@@ -31,3 +31,14 @@ Thumbs.db
 
 # Tests
 test/
+
+
+
+### by codecrimer ###
+
+# Modules
+node_modules/
+
+# DB Data
+/generated/prisma
+*.env
