@@ -17,6 +17,7 @@ env/
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # IDE
 .idea/
@@ -42,3 +43,12 @@ node_modules/
 # DB Data
 /generated/prisma
 *.env
+
+# Build
+dist/
+coverage/
+*.tsbuildinfo
+
+# Prisma generated files
+src/generated/prisma/
+generated/prisma/

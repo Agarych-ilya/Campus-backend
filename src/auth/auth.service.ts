@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, UnauthorizedException, NotFoundException, } from '@nestjs/common';
 import { RegisterDto, LoginDto } from './dto/create-auth.dto';
 import * as bcrypt from 'bcrypt';
-import { DbService } from '../../db.service';
+import { DbService } from '../db.service';
 
 @Injectable()
 export class AuthService {
@@ -18,7 +18,7 @@ export class AuthService {
     ) as any[];
 
     if (existingUsers.length > 0) {
-      throw new UnauthorizedException(`Пользователь с email ${cleanEmail} уже существует`);
+      throw new ConflictException('Этот email уже используется');
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
