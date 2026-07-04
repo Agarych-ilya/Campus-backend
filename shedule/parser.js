@@ -36,7 +36,7 @@ async function parseSite() {
   const $ = cheerio.load(data);
 
   $('tr').each((index, element) => {
-    const row = $(element).closest('tr');
+    const row = $(element).closest('tr')
     const isDate = row.find('.mpei-galaktika-lessons-grid-date').length > 0;
     const isLesson = row.find('.mpei-galaktika-lessons-grid-day').length > 0;
 
