@@ -6,6 +6,7 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { DbService } from './db.service';
 import { FileModule } from './file/file.module';
+import { ScheduleModule } from './schedule/schedule.module';
 
 @Module({
   imports: [
@@ -14,8 +15,9 @@ import { FileModule } from './file/file.module';
     }),
     AuthModule,
     FileModule,
+    ScheduleModule,
   ],
   controllers: [AppController],
   providers: [AppService, DbService],
 })
-export class AppModule {}
+export class AppModule { }
