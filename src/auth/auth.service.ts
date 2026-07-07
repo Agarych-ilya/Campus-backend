@@ -23,14 +23,13 @@ export class AuthService {
 
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    await this.db.query(
+    const result = await this.db.query(
       'INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)',
       [username, cleanEmail, hashedPassword]
-    );
+    ) as any;
 
-    return {
-      message: 'Success!',
-    };
+    const toSession = { id: result.insertId, username: username, email: cleanEmail }
+    return toSession;
   }
 
   async login(request: LoginDto) {
@@ -53,8 +52,7 @@ export class AuthService {
       throw new NotFoundException(`Неверный пароль`);
     }
 
-    return {
-      message: 'Success!',
-    };
+    const toSession = { id: candidat.id, username: candidat.username, email: candidat.email };
+    return toSession;
   }
 }
