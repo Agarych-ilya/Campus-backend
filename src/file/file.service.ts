@@ -1,233 +1,79 @@
 import {
   Injectable,
-  InternalServerErrorException,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
-import { createReadStream, existsSync } from 'fs';
-import { mkdir, stat, unlink, writeFile } from 'fs/promises';
-import { basename, extname, resolve } from 'path';
-
 import { DbService } from '../db.service';
-
-type CloudFileRow = {
-  id: number;
-  name: string;
-  path: string;
-};
-
-type SavedFile = {
-  id: number;
-  name: string;
-  path: string;
-};
-
-type FileInfo = {
-  id: number;
-  name: string;
-  path: string;
-  size: number;
-};
+import { existsSync } from 'fs';
 
 @Injectable()
 export class FileService {
-  private readonly cloudFolder = resolve(process.cwd(), 'cloud');
+  constructor(private readonly db: DbService) { }
 
-  constructor(private readonly dbService: DbService) { }
+  async postFile(file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('Файл не передан');
+    }
 
-  async saveFile(file: Express.Multer.File): Promise<SavedFile> {
-    await this.ensureCloudFolderExists();
-
-    const originalName = this.getSafeFileName(file.originalname);
-    const savedName = this.createSavedFileName(originalName);
-    const absolutePath = resolve(this.cloudFolder, savedName);
-    const relativePath = `cloud/${savedName}`;
-
-    await writeFile(absolutePath, file.buffer);
-
-    const result = await this.dbService.query(
+    const result: any = await this.db.query(
       'INSERT INTO cloud (name, path) VALUES (?, ?)',
-      [originalName, relativePath],
+      [file.originalname, file.path],
     );
 
-    const id = this.getInsertId(result);
-
     return {
-      id,
-      name: originalName,
-      path: relativePath,
+      id: result.insertId,
+      name: file.originalname,
+      size: file.size,
     };
   }
 
-  async getFiles(): Promise<FileInfo[]> {
-    const rows = await this.getCloudRows(
+  async getFiles() {
+    const files = (await this.db.query(
       'SELECT id, name, path FROM cloud ORDER BY id DESC',
-      [],
-    );
+    )) as any[];
 
-    const files: FileInfo[] = [];
-
-    for (const row of rows) {
-      const absolutePath = this.getAbsolutePath(row.path);
-
-      let size = 0;
-
-      if (existsSync(absolutePath)) {
-        const fileStat = await stat(absolutePath);
-        size = fileStat.size;
-      }
-
-      files.push({
-        id: row.id,
-        name: row.name,
-        path: row.path,
-        size,
-      });
-    }
-
-    return files;
-  }
-
-  async getFileInfo(id: number): Promise<FileInfo> {
-    const file = await this.getFileRowById(id);
-    const absolutePath = this.getAbsolutePath(file.path);
-
-    if (!existsSync(absolutePath)) {
-      throw new NotFoundException('Файл отсутствует на диске');
-    }
-
-    const fileStat = await stat(absolutePath);
-
-    return {
+    return files.map((file) => ({
       id: file.id,
       name: file.name,
-      path: file.path,
-      size: fileStat.size,
-    };
+      available: existsSync(file.path),
+    }));
   }
 
-  async getFileForDownload(id: number) {
-    const file = await this.getFileRowById(id);
-    const absolutePath = this.getAbsolutePath(file.path);
+  async getFile(id: string) {
+    const files = (await this.db.query(
+      'SELECT * FROM cloud WHERE id = ? LIMIT 1',
+      [id],
+    )) as any[];
 
-    if (!existsSync(absolutePath)) {
+    const file = files[0];
+
+    if (!file) {
+      throw new NotFoundException(`Файл ${id} не найден`);
+    }
+
+    if (!existsSync(file.path)) {
       throw new NotFoundException('Файл отсутствует на диске');
     }
 
-    return {
-      name: file.name,
-      stream: createReadStream(absolutePath),
-    };
+    return file;
   }
 
-  async deleteFile(id: number): Promise<void> {
-    const file = await this.getFileRowById(id);
-    const absolutePath = this.getAbsolutePath(file.path);
+  async deleteFile(id: string) {
+    const file = await this.getFile(id);
 
-    if (existsSync(absolutePath)) {
-      await unlink(absolutePath);
+    const fs = await import('fs/promises');
+
+    if (existsSync(file.path)) {
+      await fs.unlink(file.path);
     }
 
-    await this.dbService.query(
+    await this.db.query(
       'DELETE FROM cloud WHERE id = ?',
       [id],
     );
-  }
 
-  private async getFileRowById(id: number): Promise<CloudFileRow> {
-    const rows = await this.getCloudRows(
-      'SELECT id, name, path FROM cloud WHERE id = ? LIMIT 1',
-      [id],
-    );
-
-    if (rows.length === 0) {
-      throw new NotFoundException('Файл не найден');
-    }
-
-    return rows[0];
-  }
-
-  private async getCloudRows(
-    query: string,
-    params: unknown[],
-  ): Promise<CloudFileRow[]> {
-    const result = await this.dbService.query(query, params);
-
-    if (Array.isArray(result) && Array.isArray(result[0])) {
-      return result[0] as CloudFileRow[];
-    }
-
-    if (Array.isArray(result)) {
-      return result as CloudFileRow[];
-    }
-
-    return [];
-  }
-
-  private getInsertId(result: unknown): number {
-    if (
-      typeof result === 'object' &&
-      result !== null &&
-      'insertId' in result &&
-      typeof result.insertId === 'number'
-    ) {
-      return result.insertId;
-    }
-
-    if (
-      Array.isArray(result) &&
-      result.length > 0 &&
-      typeof result[0] === 'object' &&
-      result[0] !== null &&
-      'insertId' in result[0] &&
-      typeof result[0].insertId === 'number'
-    ) {
-      return result[0].insertId;
-    }
-
-    return 0;
-  }
-
-  private async ensureCloudFolderExists(): Promise<void> {
-    await mkdir(this.cloudFolder, {
-      recursive: true,
-    });
-  }
-
-  private getSafeFileName(fileName: string): string {
-    const onlyName = basename(fileName);
-
-    const cleanedName = onlyName
-      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    if (!cleanedName) {
-      return 'file';
-    }
-
-    return cleanedName;
-  }
-
-  private createSavedFileName(originalName: string): string {
-    const extension = extname(originalName);
-    const nameWithoutExtension = originalName.slice(
-      0,
-      originalName.length - extension.length,
-    );
-
-    const datePrefix = Date.now();
-    const randomPart = Math.round(Math.random() * 1000000);
-
-    return `${datePrefix}_${randomPart}_${nameWithoutExtension}${extension}`;
-  }
-
-  private getAbsolutePath(relativePath: string): string {
-    const absolutePath = resolve(process.cwd(), relativePath);
-
-    if (!absolutePath.startsWith(this.cloudFolder)) {
-      throw new InternalServerErrorException('Некорректный путь файла');
-    }
-
-    return absolutePath;
+    return {
+      message: 'Файл удалён',
+    };
   }
 }

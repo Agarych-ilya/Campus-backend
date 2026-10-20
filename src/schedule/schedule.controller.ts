@@ -1,24 +1,39 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import {
+    BadRequestException,
+    Controller,
+    Get,
+    Query,
+} from '@nestjs/common';
 
 import { ScheduleService } from './schedule.service';
 
 @Controller('schedule')
 export class ScheduleController {
-    constructor(private readonly scheduleService: ScheduleService) { }
+    constructor(
+        private readonly scheduleService: ScheduleService,
+    ) { }
 
     @Get('debug')
     getScheduleDebug(
-        @Query('group') group = 'А-03-23',
+        @Query('group') group?: string,
         @Query('date') date = this.getTodayDate(),
     ) {
+        if (!group) {
+            throw new BadRequestException('Не указана группа');
+        }
+
         return this.scheduleService.getScheduleDebug(group, date);
     }
 
     @Get()
     getSchedule(
-        @Query('group') group = 'А-03-23',
+        @Query('group') group?: string,
         @Query('date') date = this.getTodayDate(),
     ) {
+        if (!group) {
+            throw new BadRequestException('Не указана группа');
+        }
+
         return this.scheduleService.getSchedule(group, date);
     }
 
@@ -31,4 +46,4 @@ export class ScheduleController {
 
         return `${year}-${month}-${day}`;
     }
-}
+  }

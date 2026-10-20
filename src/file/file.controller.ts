@@ -1,94 +1,69 @@
 import {
-  BadRequestException,
   Controller,
-  Delete,
   Get,
-  Param,
-  ParseIntPipe,
   Post,
-  Res,
-  StreamableFile,
+  Param,
+  Delete,
   UploadedFile,
   UseInterceptors,
+  Res,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
-import type { Response } from 'express';
 
 import { FileService } from './file.service';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname } from 'path';
+import type { Response } from 'express';
 
 @Controller('file')
 export class FileController {
   constructor(private readonly fileService: FileService) { }
 
-  @Post('postFile')
+  @Post('upload')
   @UseInterceptors(
     FileInterceptor('file', {
-      limits: {
-        fileSize: 50 * 1024 * 1024,
-      },
+      storage: diskStorage({
+        destination: './cloud',
+
+        filename: (req, file, callback) => {
+          const extension = extname(file.originalname);
+
+          const filename =
+            `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`;
+
+          callback(null, filename);
+        },
+      }),
     }),
   )
-  async uploadFile(@UploadedFile() file: Express.Multer.File) {
-    if (!file) {
-      throw new BadRequestException('Файл не передан');
-    }
-
-    const savedFile = await this.fileService.saveFile(file);
-
-    return {
-      message: 'Файл успешно загружен',
-      file: savedFile,
-    };
+  async uploadFile(
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.fileService.postFile(file);
   }
 
-  @Get('list')
+  @Get()
   async getFiles() {
-    const files = await this.fileService.getFiles();
-
-    return {
-      message: 'Success',
-      files,
-    };
+    return this.fileService.getFiles();
   }
 
-  @Get('info/:id')
-  async getFileInfo(@Param('id', ParseIntPipe) id: number) {
-    const file = await this.fileService.getFileInfo(id);
-
-    return {
-      message: 'Success',
-      file,
-    };
-  }
-
-  @Get('getFile/:id')
+  @Get(':id/download')
   async downloadFile(
-    @Param('id', ParseIntPipe) id: number,
-    @Res({ passthrough: true }) response: Response,
-  ): Promise<StreamableFile> {
-    const fileData = await this.fileService.getFileForDownload(id);
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const file = await this.fileService.getFile(id);
 
-    response.setHeader('Content-Type', 'application/octet-stream');
-    response.setHeader(
-      'Content-Disposition',
-      this.getContentDisposition(fileData.name),
+    return res.download(
+      file.path,
+      file.name,
     );
-
-    return new StreamableFile(fileData.stream);
   }
 
-  @Delete('deleteFile/:id')
-  async deleteFile(@Param('id', ParseIntPipe) id: number) {
-    await this.fileService.deleteFile(id);
-
-    return {
-      message: 'Файл успешно удалён',
-    };
-  }
-
-  private getContentDisposition(fileName: string): string {
-    const safeFileName = fileName.replace(/"/g, '');
-
-    return `attachment; filename="${safeFileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+  @Delete(':id')
+  async deleteFile(
+    @Param('id') id: string,
+  ) {
+    return this.fileService.deleteFile(id);
   }
 }
