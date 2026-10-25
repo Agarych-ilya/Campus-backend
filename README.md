@@ -61,6 +61,38 @@ list when the server cannot be reached.
 Run the backend with `npm run start:dev`, then test locally with
 `curl http://localhost:8000/services/groups`.
 
+## CampusApp schedule API
+
+The `feature/cloud` branch also serves the app's weekly schedule:
+
+```http
+GET /health
+GET /schedule?group=А-03-23&date=2026-10-19
+```
+
+The `date` parameter is ISO `YYYY-MM-DD`. The server normalizes to
+Monday, searches for the selected group in the public MPEI RUZ service,
+loads the weekly timetable and returns
+`{ "group": "...", "date": "YYYY-MM-DD", "lessons": [...] }`.
+
+If the group is not found, the server returns 404. If the upstream
+RUZ lookup or MPEI timetable is unavailable, it returns 503 instead of
+silently reporting no lessons. The backend must be running and reachable
+from the Android emulator (`10.0.2.2:8000`) or an actual phone
+(the PC's LAN address) for online scheduling.
+
+PowerShell health check:
+
+```powershell
+curl.exe http://localhost:8000/health
+```
+
+Schedule lookup tests:
+
+```bash
+npm test -- --runInBand schedule.service.spec.ts
+```
+
 ## Description
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
