@@ -7,38 +7,46 @@ import {
   Injectable,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import {
+  allowedCommunityAdminIds,
+  allowedCommunityAdminUsernames,
+  normalizeAccountUsername,
+} from '../../auth/admin_identity';
 
-export function allowedCommunityAdminIds(): Set<number> {
-  return new Set(
-    (process.env.COMMUNITY_ADMIN_USER_IDS ?? '')
-      .split(',')
-      .map((value) => Number(value.trim()))
-      .filter((value) => Number.isSafeInteger(value) && value > 0),
-  );
-}
+// Backward-compatible export for existing guard tests.
+export { allowedCommunityAdminIds } from '../../auth/admin_identity';
 
 /**
- * Never trust a client-side flag, email field or user-controlled ID.
- * The account must have passed backend password authentication and still
- * appear in the server administrator allowlist on every protected request.
+ * Only a backend-authenticated username + session can grant admin rights.
+ * BARS display names, client flags and unverified email fields are ignored.
  */
 @Injectable()
 export class CommunityAdminGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
-    const userId = ((request as any).session as any)?.communityAdminUserId;
+    const session = (request as any).session as any | undefined;
+    const userId = session?.communityAdminUserId;
+    const username = session?.communityAdminUsername;
 
-    if (
-      !Number.isSafeInteger(userId) ||
-      !allowedCommunityAdminIds().has(userId)
-    ) {
+    const permitted =
+      Number.isSafeInteger(userId) &&
+      userId > 0 &&
+      typeof username === 'string' &&
+      (
+        allowedCommunityAdminIds().has(userId) ||
+        allowedCommunityAdminUsernames().has(
+          normalizeAccountUsername(username),
+        )
+      );
+
+    if (!permitted) {
       throw new ForbiddenException('Требуется вход администратора');
     }
 
-    // Double-submit and cross-site POST protection: the token is returned
-    // only after password login and is never placed in a browser cookie.
+    // Only password login issues the CSRF token. Never accept a username
+    // directly from headers to authorize an update or deletion.
     if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
-      const expected = ((request as any).session as any)?.communityAdminCsrf;
+      const expected = session?.communityAdminCsrf;
       const actual = request.headers['x-community-csrf'];
       if (
         typeof expected !== 'string' ||
@@ -49,6 +57,7 @@ export class CommunityAdminGuard implements CanActivate {
         throw new ForbiddenException('Необходимо обновить сессию администратора');
       }
     }
+
     return true;
   }
 }
