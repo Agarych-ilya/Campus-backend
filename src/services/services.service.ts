@@ -284,7 +284,7 @@ export class ServicesService {
     }
 
     const slug = url.pathname.replace(/^\/+|\/+$/g, '');
-    if (!slug || !/^[a-zA-Z0-9_+./-]{1,120}$/.test(slug)) {
+    if (!slug || !/^[a-zA-Z0-9_+.-]{1,120}$/.test(slug)) {
       throw new BadRequestException('Проверь ссылку на сообщество');
     }
 
