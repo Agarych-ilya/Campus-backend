@@ -23,59 +23,84 @@
 
 ## Студенческие сообщества CampusApp
 
-Модуль `src/services` отдаёт каталог сообществ и принимает заявки.
+Ветка `feature/cloud` содержит API каталога сообществ МЭИ:
 
-- `GET /services/groups` — шесть встроенных сообществ МЭИ и группы
-  из базы со статусом `approved`. Ответ содержит `id`, `title`,
-  `subtitle`, `description`, `category`, `iconKind`,
-  `memberCount`, `memberCountSource`, `memberCountAsOf`,
-  `telegramUrl`, `vkUrl`.
-- `POST /services/groups/submissions` — принимает предложение нового
-  сообщества и отвечает `202 Accepted`, `{ "id": 123, "status": "pending" }`.
-  Поддерживаемые соцсети: `https://t.me/...` и `https://vk.com/...`.
-  Название (3–80 символов), описание (15–1200), категория и иконка обязательны.
-  Численность указывается по желанию и помечается как неподтверждённая.
-- Заявки **никогда не публикуются сразу**: пользователь видит их только
-  на своём устройстве до одобрения. Публичный каталог читает записи
-  исключительно со статусом `approved`.
-- Не требуют авторизации только публичный каталог и отправка заявки.
-  Реализованы валидация, ограничение частоты по IP в памяти процесса
-  (одна заявка за 10 минут) и строгая проверка доменов ссылок.
-  Перед открытым интернет-релизом рекомендуется подключить аккаунты
-  CampusApp, постоянный rate limiter и административный интерфейс.
+- `GET /services/groups` — возвращает встроенные и одобренные группы:
+  описание, Telegram/VK, автоматически полученную численность
+  `memberCount`, источник `memberCountSource` (`telegram`/`vk`),
+  время `memberCountCheckedAt` и признак приблизительного значения
+  `memberCountApproximate`. Пример: страница Telegram может показывать
+  `12.1K subscribers`, и тогда число помечается как приблизительное.
+- `POST /services/groups/submissions` — запрос `multipart/form-data`:
+  название `title`, `description`, `category`, `iconKind` (тип
+  резервной пиктограммы), `telegramUrl` и/или `vkUrl` и выбранная
+  пользователем картинка `icon` (PNG/JPEG/WebP, до 700 КБ).
+  Ответ `202 Accepted` и `{ "id": 123, "status": "pending" }`.
+  Старое поле `memberCount` сохраняется в DTO только для совместимости
+  с прежними клиентами, но **сервер его игнорирует**.
+- `GET /services/groups/icons/:id` — выдаёт выбранную автором иконку,
+  только если модератор одобрил соответствующее сообщество.
 
-Хранилище — MySQL-таблица `campus_communities`. Она создаётся при первом
-обращении к API, если MySQL-пользователь имеет право `CREATE TABLE`.
-При необходимости примените `migrations/20261025_campus_communities.sql`
-вручную.
+### Получение численности из соцсетей
 
-### Проверка и модерация
+Бэкенд регулярно обновляет статистику **при запросе каталога**, кешируя
+её на 15 минут. Число нельзя указать вручную. Записи в каталоге остаются
+доступными, даже если платформа не отдала число.
 
-Для текущего MVP модератор проверяет заявки напрямую через SQL:
+Для Telegram сервер пытается получить число из публичной страницы
+`https://t.me/<username>` (доступность счётчика зависит от настроек
+сообщества). Если в `.env` настроен `TELEGRAM_BOT_TOKEN`, дополнительно
+используется официальный Bot API `getChatMemberCount`. Для закрытых
+групп бот должен иметь необходимый доступ; некоторые чаты не отдают
+численность без вступления бота.
+
+Для VK сервер вызывает `groups.getById` с `fields=members_count`
+через API ВКонтакте. Требуется действующий `VK_ACCESS_TOKEN` в
+локальном `.env` бэкенда; токен **никогда не добавляй в GitHub и
+не передавай во Flutter**. Когда у сообщества две ссылки, сначала
+используется счётчик Telegram, затем VK при недоступности первого.
+
+В `.env.example` добавлены необязательные переменные:
+```dotenv
+TELEGRAM_BOT_TOKEN=
+VK_ACCESS_TOKEN=
+```
+
+### Хранение и модерация
+
+Таблицы `campus_communities` и `campus_community_icons` создаются
+при первом обращении к каталогу, если у пользователя MySQL есть право
+`CREATE TABLE`. Если разрешения нет, примени SQL-файл
+`migrations/20261025_campus_communities.sql` вручную.
+
+Загруженные картинки хранятся отдельно в MySQL; публикуются только
+после одобрения. Новые заявки всегда имеют `status = 'pending'`.
+Для текущего MVP модератор проверяет их вручную в MySQL:
 
 ```sql
-SELECT id, title, description, telegram_url, vk_url, member_count
+SELECT id, title, description, telegram_url, vk_url, created_at
 FROM campus_communities
 WHERE status = 'pending' ORDER BY created_at DESC;
 
--- Укажи ID проверенной записи:
-UPDATE campus_communities SET status = 'approved'
+UPDATE campus_communities
+SET status = 'approved'
 WHERE id = 123 AND status = 'pending';
 
--- Или отклони запись:
-UPDATE campus_communities SET status = 'rejected'
+-- Или отклонить:
+UPDATE campus_communities
+SET status = 'rejected'
 WHERE id = 123 AND status = 'pending';
 ```
 
-Не подтверждай заявки автоматически: ссылки и сведения о сообществах
-нужно проверять. Численность для четырёх встроенных Telegram-каналов —
-снимок публичных страниц за октябрь 2026 года, **не live-статистика**.
-В первых двух пользовательских чатах количество участников не установлено.
+Проверяй описание, ссылки и изображения до публикации.
+Сейчас реализовано простое ограничение по IP (одна заявка за 10 минут
+в рамках одного процесса). Перед публичным релизом потребуется
+авторизация заявок, постоянный rate limiter и панель модератора.
 
-Тесты:
+Тесты (запуск из папки бэкенда):
 
 ```powershell
-npm test -- --runInBand services.service.spec.ts
+npm test -- --runInBand services.service.spec.ts community-stats.service.spec.ts
 ```
 
 ## CampusApp services API
