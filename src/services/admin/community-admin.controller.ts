@@ -15,12 +15,15 @@ import {
   Req,
   Res,
   UnauthorizedException,
+  UploadedFile,
+  UseInterceptors,
   ServiceUnavailableException,
   UseGuards,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthService } from '../../auth/auth.service';
 import { LoginDto } from '../../auth/dto/create-auth.dto';
 import { CommunityAdminService } from './community-admin.service';
@@ -125,6 +128,20 @@ export class CommunityAdminController {
     @Body() dto: UpdateCommunityDto,
   ) {
     return this.service.update(id, dto);
+  }
+
+  @Patch('groups/:id/icon')
+  @UseGuards(CommunityAdminGuard)
+  @UseInterceptors(
+    FileInterceptor('icon', {
+      limits: { fileSize: 700 * 1024, files: 1, fields: 0 },
+    }),
+  )
+  updateIcon(
+    @Param('id') id: string,
+    @UploadedFile() icon: Express.Multer.File,
+  ) {
+    return this.service.updateIcon(id, icon);
   }
 
   @Delete('groups/:id')
