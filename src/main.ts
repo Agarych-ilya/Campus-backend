@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import session from 'express-session';
+import { communityAdminEnabled } from './auth/admin_identity';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -24,7 +25,7 @@ async function bootstrap() {
     credentials: true,
   });
 
-  const adminEnabled = (process.env.COMMUNITY_ADMIN_USER_IDS ?? '').trim() !== '';
+  const adminEnabled = communityAdminEnabled();
   const sessionSecret = process.env.SESSION_SECRET?.trim();
 
   // Legacy dev-only fallback is forbidden as soon as administrator rights
