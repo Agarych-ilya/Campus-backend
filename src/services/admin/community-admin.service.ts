@@ -77,7 +77,7 @@ export class CommunityAdminService {
         telegramUrl: row ? row.telegram_url : base.telegramUrl,
         vkUrl: row ? row.vk_url : base.vkUrl,
         iconUrl: featuredIconIds.has(base.id)
-          ? '/services/groups/featured-icons/' + base.id
+          ? '/services/groups/featured-icons/' + base.id + '?v=' + Date.now()
           : null,
         status: row?.hidden ? 'hidden' : 'approved',
         builtIn: true,
@@ -109,7 +109,7 @@ export class CommunityAdminService {
         memberCountCheckedAt: null,
         memberCountApproximate: false,
         iconUrl: row.has_icon
-          ? '/services/admin/groups/icons/' + String(row.id)
+          ? '/services/admin/groups/icons/' + String(row.id) + '?v=' + Date.now()
           : null,
         status: row.status,
         builtIn: false,
