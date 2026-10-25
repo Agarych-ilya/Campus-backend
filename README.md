@@ -21,6 +21,63 @@
   <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
   [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
+## Студенческие сообщества CampusApp
+
+Модуль `src/services` отдаёт каталог сообществ и принимает заявки.
+
+- `GET /services/groups` — шесть встроенных сообществ МЭИ и группы
+  из базы со статусом `approved`. Ответ содержит `id`, `title`,
+  `subtitle`, `description`, `category`, `iconKind`,
+  `memberCount`, `memberCountSource`, `memberCountAsOf`,
+  `telegramUrl`, `vkUrl`.
+- `POST /services/groups/submissions` — принимает предложение нового
+  сообщества и отвечает `202 Accepted`, `{ "id": 123, "status": "pending" }`.
+  Поддерживаемые соцсети: `https://t.me/...` и `https://vk.com/...`.
+  Название (3–80 символов), описание (15–1200), категория и иконка обязательны.
+  Численность указывается по желанию и помечается как неподтверждённая.
+- Заявки **никогда не публикуются сразу**: пользователь видит их только
+  на своём устройстве до одобрения. Публичный каталог читает записи
+  исключительно со статусом `approved`.
+- Не требуют авторизации только публичный каталог и отправка заявки.
+  Реализованы валидация, ограничение частоты по IP в памяти процесса
+  (одна заявка за 10 минут) и строгая проверка доменов ссылок.
+  Перед открытым интернет-релизом рекомендуется подключить аккаунты
+  CampusApp, постоянный rate limiter и административный интерфейс.
+
+Хранилище — MySQL-таблица `campus_communities`. Она создаётся при первом
+обращении к API, если MySQL-пользователь имеет право `CREATE TABLE`.
+При необходимости примените `migrations/20261025_campus_communities.sql`
+вручную.
+
+### Проверка и модерация
+
+Для текущего MVP модератор проверяет заявки напрямую через SQL:
+
+```sql
+SELECT id, title, description, telegram_url, vk_url, member_count
+FROM campus_communities
+WHERE status = 'pending' ORDER BY created_at DESC;
+
+-- Укажи ID проверенной записи:
+UPDATE campus_communities SET status = 'approved'
+WHERE id = 123 AND status = 'pending';
+
+-- Или отклони запись:
+UPDATE campus_communities SET status = 'rejected'
+WHERE id = 123 AND status = 'pending';
+```
+
+Не подтверждай заявки автоматически: ссылки и сведения о сообществах
+нужно проверять. Численность для четырёх встроенных Telegram-каналов —
+снимок публичных страниц за октябрь 2026 года, **не live-статистика**.
+В первых двух пользовательских чатах количество участников не установлено.
+
+Тесты:
+
+```powershell
+npm test -- --runInBand services.service.spec.ts
+```
+
 ## CampusApp services API
 
 The backend exposes a read-only catalog used by the Flutter application's
