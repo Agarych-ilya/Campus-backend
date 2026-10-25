@@ -4,6 +4,7 @@ import { DbService } from '../db.service';
 import { CommunityAdminController } from './admin/community-admin.controller';
 import { CommunityAdminGuard } from './admin/community-admin.guard';
 import { CommunityAdminService } from './admin/community-admin.service';
+import { BarsSessionVerifier } from './admin/bars-session-verifier.service';
 import { CommunityStatsService } from './community-stats.service';
 import { ServicesController } from './services.controller';
 import { ServicesService } from './services.service';
@@ -17,6 +18,7 @@ import { ServicesService } from './services.service';
     CommunityStatsService,
     CommunityAdminService,
     CommunityAdminGuard,
+    BarsSessionVerifier,
   ],
 })
 export class ServicesModule {}
