@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  NotFoundException,
   ConflictException,
   HttpException,
   HttpStatus,
@@ -9,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { DbService } from '../db.service';
 import { CreateCommunityDto } from './dto/create-community.dto';
+import { CommunityStatsService, MemberCountSource } from './community-stats.service';
 
 export interface Community {
   id: string;
@@ -19,8 +21,10 @@ export interface Community {
   category: string;
   iconKind: string;
   memberCount: number | null;
-  memberCountSource: 'self_reported' | 'telegram_snapshot' | null;
-  memberCountAsOf?: string | null;
+  memberCountSource: MemberCountSource;
+  memberCountCheckedAt: string | null;
+  memberCountApproximate: boolean;
+  iconUrl: string | null;
   telegramUrl: string | null;
   vkUrl: string | null;
 }
@@ -39,6 +43,9 @@ const featuredCommunities: readonly Community[] = [
     iconKind: 'chat',
     memberCount: null,
     memberCountSource: null,
+    memberCountCheckedAt: null,
+    memberCountApproximate: false,
+    iconUrl: null,
     telegramUrl: 'https://t.me/mpeichat',
     vkUrl: null,
   },
@@ -54,6 +61,9 @@ const featuredCommunities: readonly Community[] = [
     iconKind: 'study',
     memberCount: null,
     memberCountSource: null,
+    memberCountCheckedAt: null,
+    memberCountApproximate: false,
+    iconUrl: null,
     telegramUrl: 'https://t.me/mpei_1kurs',
     vkUrl: null,
   },
@@ -67,9 +77,11 @@ const featuredCommunities: readonly Community[] = [
       'из жизни МЭИ. Контент и правила доступны по ссылке.',
     category: 'Новости и мемы',
     iconKind: 'news',
-    memberCount: 2392,
-    memberCountSource: 'telegram_snapshot',
-    memberCountAsOf: 'октябрь 2026',
+    memberCount: null,
+    memberCountSource: null,
+    memberCountCheckedAt: null,
+    memberCountApproximate: false,
+    iconUrl: null,
     telegramUrl: 'https://t.me/MPEImai',
     vkUrl: null,
   },
@@ -83,9 +95,11 @@ const featuredCommunities: readonly Community[] = [
       'объявления и важная информация для студентов и абитуриентов.',
     category: 'Новости университета',
     iconKind: 'campus',
-    memberCount: 12091,
-    memberCountSource: 'telegram_snapshot',
-    memberCountAsOf: 'октябрь 2026',
+    memberCount: null,
+    memberCountSource: null,
+    memberCountCheckedAt: null,
+    memberCountApproximate: false,
+    iconUrl: null,
     telegramUrl: 'https://t.me/mpeiuniversity',
     vkUrl: 'https://vk.com/mpei_ru',
   },
@@ -99,9 +113,11 @@ const featuredCommunities: readonly Community[] = [
       'Новости, студенческие инициативы и полезные объявления.',
     category: 'Новости университета',
     iconKind: 'club',
-    memberCount: 2625,
-    memberCountSource: 'telegram_snapshot',
-    memberCountAsOf: 'октябрь 2026',
+    memberCount: null,
+    memberCountSource: null,
+    memberCountCheckedAt: null,
+    memberCountApproximate: false,
+    iconUrl: null,
     telegramUrl: 'https://t.me/mpei_profcom',
     vkUrl: 'https://vk.com/profcom_mpei',
   },
@@ -115,9 +131,11 @@ const featuredCommunities: readonly Community[] = [
       'инициатив и мероприятий университетского сообщества.',
     category: 'Новости университета',
     iconKind: 'events',
-    memberCount: 2799,
-    memberCountSource: 'telegram_snapshot',
-    memberCountAsOf: 'октябрь 2026',
+    memberCount: null,
+    memberCountSource: null,
+    memberCountCheckedAt: null,
+    memberCountApproximate: false,
+    iconUrl: null,
     telegramUrl: 'https://t.me/oss_mpei',
     vkUrl: 'https://vk.com/oss_mpei',
   },
@@ -129,7 +147,7 @@ type CommunityRow = {
   description: string;
   category: string;
   icon_kind: string;
-  member_count: number | null;
+  icon_uploaded?: number | null;
   telegram_url: string | null;
   vk_url: string | null;
 };
@@ -141,7 +159,10 @@ export class ServicesService {
   private readonly submissionsByIp = new Map<string, number>();
   private static readonly submitCooldownMs = 10 * 60 * 1000;
 
-  constructor(private readonly db: DbService) {}
+  constructor(
+    private readonly db: DbService,
+    private readonly stats: CommunityStatsService,
+  ) {}
 
   /** Kept as a compatibility helper for the original Flutter client. */
   getTelegramGroups() {
@@ -158,13 +179,16 @@ export class ServicesService {
    */
   async getGroups(): Promise<Community[]> {
     const featured = featuredCommunities.map((community) => ({ ...community }));
+    let approved: Community[] = featured;
 
     try {
       await this.ensureTable();
       const rows = (await this.db.query(
-        "SELECT id, title, description, category, icon_kind, member_count, " +
-          "telegram_url, vk_url FROM campus_communities " +
-          "WHERE status = 'approved' ORDER BY id DESC LIMIT 200",
+        'SELECT c.id, c.title, c.description, c.category, c.icon_kind, ' +
+          'c.telegram_url, c.vk_url, i.community_id AS icon_uploaded ' +
+          'FROM campus_communities c LEFT JOIN campus_community_icons i ' +
+          "ON i.community_id = c.id WHERE c.status = 'approved' " +
+          'ORDER BY c.id DESC LIMIT 200',
       )) as CommunityRow[];
 
       const custom = rows.map((row): Community => {
@@ -181,32 +205,58 @@ export class ServicesService {
           description: row.description,
           category: row.category,
           iconKind: row.icon_kind,
-          memberCount:
-            row.member_count === null ? null : Number(row.member_count),
-          memberCountSource:
-            row.member_count === null ? null : 'self_reported',
-          memberCountAsOf: null,
+          memberCount: null,
+          memberCountSource: null,
+          memberCountCheckedAt: null,
+          memberCountApproximate: false,
+          iconUrl: row.icon_uploaded
+            ? '/services/groups/icons/' + String(row.id)
+            : null,
           telegramUrl,
           vkUrl: row.vk_url,
         };
       });
 
-      return [...featured, ...custom];
+      approved = [...featured, ...custom];
     } catch (error) {
       this.logger.warn('Community directory DB unavailable; serving built-in groups');
-      return featured;
     }
+
+    // Fetch at most 24 links per request, with concurrency limited to six.
+    // Other entries remain visible without counts until later requests.
+    const queue = approved.slice(0, 24);
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(6, queue.length) }, async () => {
+      while (cursor < queue.length) {
+        const community = queue[cursor++];
+        const updated = await this.stats.getMemberCount(
+          community.telegramUrl,
+          community.vkUrl,
+        );
+        community.memberCount = updated.memberCount;
+        community.memberCountSource = updated.memberCountSource;
+        community.memberCountCheckedAt = updated.memberCountCheckedAt;
+        community.memberCountApproximate = updated.memberCountApproximate;
+      }
+    }));
+
+    return approved;
   }
 
   /**
    * Anonymous suggestions are ALWAYS pending. They cannot overwrite
    * featured groups or become public without manual approval.
    */
-  async submitCommunity(dto: CreateCommunityDto, clientIp: string) {
+  async submitCommunity(
+    dto: CreateCommunityDto,
+    clientIp: string,
+    icon?: Express.Multer.File,
+  ) {
     const title = dto.title.trim();
     const description = dto.description.trim();
     const category = dto.category;
     const iconKind = dto.iconKind;
+    const verifiedIcon = icon ? this.validateIcon(icon) : null;
 
     if (title.length < 3 || description.length < 15) {
       throw new BadRequestException('Заполни название и описание сообщества');
@@ -267,11 +317,28 @@ export class ServicesService {
           description,
           category,
           iconKind,
-          dto.memberCount ?? null,
+          null, // Count always comes from Telegram or VK, never user input.
           telegramUrl,
           vkUrl,
         ],
       )) as { insertId: number };
+
+      if (verifiedIcon) {
+        try {
+          await this.db.query(
+            'INSERT INTO campus_community_icons ' +
+              '(community_id, icon_mime, icon_data) VALUES (?, ?, ?)',
+            [Number(result.insertId), verifiedIcon.mime, verifiedIcon.bytes],
+          );
+        } catch (error) {
+          // Do not leave a pending record without its selected image.
+          await this.db.query(
+            'DELETE FROM campus_communities WHERE id = ? AND status = ?',
+            [Number(result.insertId), 'pending'],
+          ).catch(() => undefined);
+          throw error;
+        }
+      }
 
       this.submissionsByIp.set(ipKey, now);
       if (this.submissionsByIp.size > 1000) {
@@ -295,6 +362,61 @@ export class ServicesService {
         'Сохранение заявок временно недоступно. Попробуй позже',
       );
     }
+  }
+
+  /**
+   * Image bytes are checked independently of the filename and MIME header.
+   * Only approved communities expose their images via the public endpoint.
+   */
+  private validateIcon(file: Express.Multer.File) {
+    const bytes = file.buffer;
+    if (!Buffer.isBuffer(bytes) || bytes.length < 12 ||
+        bytes.length > 700 * 1024) {
+      throw new BadRequestException(
+        'Иконка должна быть PNG, JPEG или WebP размером до 700 КБ',
+      );
+    }
+
+    const png = bytes.subarray(0, 8).equals(
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    );
+    const jpeg = bytes[0] === 0xff &&
+      bytes[1] === 0xd8 && bytes[2] === 0xff;
+    const webp = bytes.toString('ascii', 0, 4) === 'RIFF' &&
+      bytes.toString('ascii', 8, 12) === 'WEBP';
+
+    const mime = png ? 'image/png'
+      : jpeg ? 'image/jpeg'
+      : webp ? 'image/webp'
+      : null;
+
+    if (!mime) {
+      throw new BadRequestException(
+        'Неподдерживаемый формат иконки. Выбери PNG, JPEG или WebP',
+      );
+    }
+
+    return { mime, bytes };
+  }
+
+  async getPublicIcon(communityId: number): Promise<{ mime: string; data: Buffer }> {
+    if (!Number.isSafeInteger(communityId) || communityId < 1) {
+      throw new BadRequestException('Некорректный ID сообщества');
+    }
+
+    await this.ensureTable();
+    const rows = (await this.db.query(
+      'SELECT i.icon_mime, i.icon_data FROM campus_community_icons i ' +
+        'JOIN campus_communities c ON c.id = i.community_id ' +
+        "WHERE c.id = ? AND c.status = 'approved' LIMIT 1",
+      [communityId],
+    )) as Array<{ icon_mime: string; icon_data: Buffer }>;
+
+    if (!rows.length || !Buffer.isBuffer(rows[0].icon_data)) {
+      throw new NotFoundException('Иконка сообщества не найдена');
+    }
+
+    return { mime: rows[0].icon_mime, data: rows[0].icon_data };
   }
 
   private telegramUsernameFromLink(link: string): string {
@@ -360,6 +482,13 @@ export class ServicesService {
             'created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, ' +
             'INDEX idx_community_status (status, created_at)' +
             ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci',
+        );
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_community_icons (' +
+            'community_id BIGINT UNSIGNED NOT NULL PRIMARY KEY, ' +
+            'icon_mime VARCHAR(16) NOT NULL, ' +
+            'icon_data MEDIUMBLOB NOT NULL' +
+            ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
         );
       })().catch((error: unknown) => {
         this.tableReady = null;
