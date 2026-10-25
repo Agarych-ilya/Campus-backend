@@ -21,6 +21,46 @@
   <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
   [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
+## CampusApp services API
+
+The backend exposes a read-only catalog used by the Flutter application's
+**Services → Groups** section:
+
+```http
+GET /services/groups
+```
+
+Example response:
+
+```json
+[
+  {
+    "title": "Чат студентов МЭИ",
+    "username": "mpeichat",
+    "subtitle": "Telegram · общение студентов"
+  },
+  {
+    "title": "Первый курс МЭИ",
+    "username": "mpei_1kurs",
+    "subtitle": "Telegram · первокурсники"
+  },
+  {
+    "title": "Подслушано МЭИ",
+    "username": "MPEImai",
+    "subtitle": "Telegram · канал"
+  }
+]
+```
+
+The directory is deliberately public and read-only: it contains only
+public Telegram usernames and never holds student credentials or NFC card IDs.
+Edit `src/services/services.service.ts` to curate the catalog.
+The Flutter client validates Telegram handles and falls back to its bundled
+list when the server cannot be reached.
+
+Run the backend with `npm run start:dev`, then test locally with
+`curl http://localhost:8000/services/groups`.
+
 ## Description
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
