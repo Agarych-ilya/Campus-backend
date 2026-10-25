@@ -51,6 +51,19 @@ export class UpdateCommunityDto {
   hidden?: boolean;
 }
 
+/** Credentials for an existing Campus-backend account, not BARS. */
+export class CommunityAdminLoginDto {
+  @IsString()
+  @MinLength(2)
+  @MaxLength(100)
+  username!: string;
+
+  @IsString()
+  @MinLength(6)
+  @MaxLength(100)
+  password!: string;
+}
+
 export class ReviewCommunityDto {
   @IsIn(['approved', 'rejected'])
   status!: 'approved' | 'rejected';
