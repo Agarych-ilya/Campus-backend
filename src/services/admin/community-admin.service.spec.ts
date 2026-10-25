@@ -12,6 +12,7 @@ describe('CommunityAdminService', () => {
     query = jest.fn().mockImplementation((sql: string) => {
       if (sql.includes('campus_featured_overrides') &&
           sql.startsWith('SELECT')) return [];
+      if (sql.startsWith('SELECT id FROM campus_featured_icons')) return [];
       if (sql.includes('FROM campus_communities') &&
           sql.startsWith('SELECT')) {
         return [{
@@ -34,7 +35,12 @@ describe('CommunityAdminService', () => {
     ensureTable = jest.fn().mockResolvedValue(undefined);
     service = new CommunityAdminService(
       { query } as unknown as DbService,
-      { ensureTable } as unknown as ServicesService,
+      {
+        ensureTable,
+        validateIcon: (file: Express.Multer.File) => ({
+          mime: 'image/png', bytes: file.buffer,
+        }),
+      } as unknown as ServicesService,
     );
   });
 
@@ -95,6 +101,28 @@ describe('CommunityAdminService', () => {
   it('allows restoring a hidden built-in group', async () => {
     const outcome = await service.update('mpeichat', { hidden: false });
     expect(outcome).toEqual({ id: 'mpeichat', status: 'approved' });
+  });
+
+  it('lets the admin replace the photo of a built-in group', async () => {
+    const icon = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
+    await service.updateIcon('mpeichat', {
+      buffer: icon,
+    } as Express.Multer.File);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO campus_featured_icons'),
+      ['mpeichat', 'image/png', icon],
+    );
+  });
+
+  it('lets the admin replace an approved or pending custom icon', async () => {
+    const icon = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
+    await service.updateIcon('community-42', {
+      buffer: icon,
+    } as Express.Multer.File);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO campus_community_icons'),
+      [42, 'image/png', icon],
+    );
   });
 
   it('does not accept malformed community IDs', async () => {
