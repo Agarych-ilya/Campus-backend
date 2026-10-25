@@ -15,6 +15,24 @@ export function allowedCommunityAdminUsernames(): Set<string> {
   );
 }
 
+/**
+ * Only a record book read by our server from an authenticated BARS page
+ * can be compared against this allowlist. Never accept a local profile's
+ * claimed record book as proof of identity.
+ */
+export function normalizeBarsRecordBook(recordBook: string): string {
+  return recordBook.normalize('NFKC').trim().replace(/\\s+/g, '').toUpperCase();
+}
+
+export function allowedCommunityAdminBarsRecordBooks(): Set<string> {
+  return new Set(
+    (process.env.COMMUNITY_ADMIN_BARS_RECORD_BOOKS ?? '')
+      .split(',')
+      .map(normalizeBarsRecordBook)
+      .filter((value) => value.length > 0),
+  );
+}
+
 /** Legacy numeric-ID configuration remains supported. */
 export function allowedCommunityAdminIds(): Set<number> {
   return new Set(
@@ -27,5 +45,6 @@ export function allowedCommunityAdminIds(): Set<number> {
 
 export function communityAdminEnabled(): boolean {
   return allowedCommunityAdminUsernames().size > 0 ||
-    allowedCommunityAdminIds().size > 0;
+    allowedCommunityAdminIds().size > 0 ||
+    allowedCommunityAdminBarsRecordBooks().size > 0;
 }
