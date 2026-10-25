@@ -248,7 +248,14 @@ export class ServicesService {
 
       approved = [...featured, ...custom];
     } catch (error) {
-      this.logger.warn('Community directory DB unavailable; serving built-in groups');
+      this.logger.error(
+        'Community catalog database unavailable; refusing stale seed fallback',
+      );
+      // The server cannot know which built-in groups an admin has hidden.
+      // Failing closed prevents deleted groups from being republished.
+      throw new ServiceUnavailableException(
+        'Каталог сообществ временно недоступен',
+      );
     }
 
     // Fetch at most 24 links per request, with concurrency limited to six.
