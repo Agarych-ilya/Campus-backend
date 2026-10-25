@@ -5,6 +5,7 @@ import {
 import { AuthService } from '../../auth/auth.service';
 import { CommunityAdminController } from './community-admin.controller';
 import { CommunityAdminService } from './community-admin.service';
+import { BarsSessionVerifier } from './bars-session-verifier.service';
 
 describe('CommunityAdminController login by username', () => {
   const savedIds = process.env.COMMUNITY_ADMIN_USER_IDS;
@@ -13,6 +14,7 @@ describe('CommunityAdminController login by username', () => {
   const controller = new CommunityAdminController(
     {} as CommunityAdminService,
     { loginByUsername } as unknown as AuthService,
+    { verify: jest.fn() } as unknown as BarsSessionVerifier,
   );
 
   function mockRequest() {
