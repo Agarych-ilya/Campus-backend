@@ -197,10 +197,20 @@ export class ServicesService {
         hidden: number;
       }>;
       const map = new Map(overrides.map((row) => [row.id, row]));
+      const featuredIcons = (await this.db.query(
+        'SELECT id FROM campus_featured_icons',
+      )) as Array<{ id: string }>;
+      const featuredIconIds = new Set(featuredIcons.map((row) => row.id));
       featured = featured.flatMap((original) => {
         const override = map.get(original.id);
-        if (!override) return [original];
-        if (Boolean(override.hidden)) return [];
+        if (Boolean(override?.hidden)) return [];
+        if (!override) {
+          return [{
+            ...original,
+            iconUrl: featuredIconIds.has(original.id)
+              ? '/services/groups/featured-icons/' + original.id : null,
+          }];
+        }
         return [{
           ...original,
           title: override.title,
@@ -210,6 +220,8 @@ export class ServicesService {
           iconKind: override.icon_kind,
           telegramUrl: override.telegram_url,
           vkUrl: override.vk_url,
+          iconUrl: featuredIconIds.has(original.id)
+            ? '/services/groups/featured-icons/' + original.id : null,
         }];
       });
       const rows = (await this.db.query(
@@ -404,7 +416,7 @@ export class ServicesService {
    * Image bytes are checked independently of the filename and MIME header.
    * Only approved communities expose their images via the public endpoint.
    */
-  private validateIcon(file: Express.Multer.File) {
+  validateIcon(file: Express.Multer.File) {
     const bytes = file.buffer;
     if (!Buffer.isBuffer(bytes) || bytes.length < 12 ||
         bytes.length > 700 * 1024) {
@@ -433,6 +445,26 @@ export class ServicesService {
     }
 
     return { mime, bytes };
+  }
+
+  async getFeaturedIcon(id: string): Promise<{ mime: string; data: Buffer }> {
+    if (!featuredCommunities.some((community) => community.id === id)) {
+      throw new NotFoundException('Сообщество не найдено');
+    }
+
+    await this.ensureTable();
+    const rows = (await this.db.query(
+      'SELECT i.icon_mime, i.icon_data FROM campus_featured_icons i ' +
+        'LEFT JOIN campus_featured_overrides o ON o.id = i.id ' +
+        'WHERE i.id = ? AND (o.hidden IS NULL OR o.hidden = 0) LIMIT 1',
+      [id],
+    )) as Array<{ icon_mime: string; icon_data: Buffer }>;
+
+    if (rows.length === 0 || !Buffer.isBuffer(rows[0].icon_data)) {
+      throw new NotFoundException('Иконка не найдена');
+    }
+
+    return { mime: rows[0].icon_mime, data: rows[0].icon_data };
   }
 
   async getPublicIcon(communityId: number): Promise<{ mime: string; data: Buffer }> {
@@ -536,6 +568,13 @@ export class ServicesService {
             'telegram_url VARCHAR(512) NULL, ' +
             'vk_url VARCHAR(512) NULL, ' +
             'hidden TINYINT(1) NOT NULL DEFAULT 0' +
+            ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_featured_icons (' +
+            'id VARCHAR(64) NOT NULL PRIMARY KEY, ' +
+            'icon_mime VARCHAR(16) NOT NULL, ' +
+            'icon_data MEDIUMBLOB NOT NULL' +
             ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
         );
       })().catch((error: unknown) => {
