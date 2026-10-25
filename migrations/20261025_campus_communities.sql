@@ -18,6 +18,14 @@ CREATE TABLE IF NOT EXISTS campus_communities (
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_unicode_ci;
 
+-- User-uploaded icons are stored separately so existing community rows
+-- remain backward compatible with the new gallery-upload feature.
+CREATE TABLE IF NOT EXISTS campus_community_icons (
+  community_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  icon_mime VARCHAR(16) NOT NULL,
+  icon_data MEDIUMBLOB NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- The public API only returns approved submissions.
 -- Moderators review pending entries directly in MySQL for this MVP:
 -- SELECT id, title, description, telegram_url, vk_url, member_count,
