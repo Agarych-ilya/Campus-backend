@@ -21,86 +21,101 @@
   <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
   [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
-## Администрирование сообществ
+## Администрирование сообществ: назначение по логину
 
-**Функция требует настройки.** Сам по себе вход через БАРС не создаёт
-сессию NestJS, поэтому для управления сообществами используется отдельный
-аккаунт бэкенда (`users`).
+Администратором можно назначить **конкретный аккаунт бэкенда по логину**,
+например `OgarkovIA`. ID из MySQL Workbench искать не требуется.
 
-### Первый запуск для владельца проекта
+**Важно:** обычный вход в CampusApp через БАРС использует WebView и
+сохраняет учебный профиль локально. Он НЕ подтверждает серверу личность
+администратора. В панели «Группы → Управление» требуется отдельный
+вход **логин + пароль аккаунта Campus-backend**.
 
-1. Зарегистрируй собственный аккаунт бэкенда через
-   `POST http://localhost:8000/auth/register` (имя, email, пароль).
-   Используй пароль, которого нет у других аккаунтов.
-   Это обычная регистрация: она **не** выдаёт права администратора.
-2. Найди ID своего аккаунта в MySQL, например через MySQL Workbench:
+### Первоначальная настройка
 
-   ```sql
-   SELECT id, username, email FROM users WHERE email = 'admin@example.com';
-   ```
+1. **Если аккаунт `OgarkovIA` уже зарегистрирован в таблице `users`**
+   через `POST /auth/register`, переходи сразу к шагу 2.
 
-   Подставь **свой** адрес, не пример из инструкции.
-3. В локальный **`.env`** сервера добавь (ID замени на полученный):
-
-   ```dotenv
-   COMMUNITY_ADMIN_USER_IDS=7
-   SESSION_SECRET=REPLACE_WITH_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
-   COOKIE_SECURE=false
-   ```
-
-   Для генерации секрета открой PowerShell:
+   Если аккаунта ещё нет, зарегистрируй его **до включения админ-имени
+   в `.env`**. Запрос требует `username`, `email`, `password`:
 
    ```powershell
-   $randomBytes = New-Object byte[] 48
-   [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($randomBytes)
-   [Convert]::ToBase64String($randomBytes)
+   $login = 'OgarkovIA'
+   $email = Read-Host 'Email для регистрации'
+   $password = Read-Host 'Новый пароль' -AsSecureString
+   $body = @{
+     username = $login
+     email = $email
+     password = [System.Net.NetworkCredential]::new('', $password).Password
+   } | ConvertTo-Json
+   Invoke-RestMethod -Uri 'http://localhost:8000/auth/register' -Method Post -ContentType 'application/json' -Body $body
+   Remove-Variable body, password
    ```
 
-   Вставь результат в `SESSION_SECRET`. **Никогда не коммить `.env` в
-   GitHub.** Админ-режим не запустится без достаточно длинного секрета.
-4. Перезапусти бэкенд, обнови Flutter и открой
-   **Сервисы → Группы → значок администратора**.
-   Введи почту и пароль того же аккаунта бэкенда.
+   Email нужен **только для регистрации аккаунта**. При входе
+   администратора он больше не вводится и не проверяется.
+   Не используй пароль БАРС: создай отдельный надёжный пароль.
 
-### Возможности панели
+2. В локальный `.env` бэкенда добавь:
 
-- **На проверке** — можно подтверждать, отклонять, редактировать и удалять
-  заявки. Подтверждение делает сообщество общедоступным.
-- **Опубликованы** — редактирование названия, описания, категории,
-  резервного значка, фотографии и ссылок; удаление опубликованных групп.
-- **Скрытые** — встроенные сообщества МЭИ при удалении скрываются через
-  таблицу `campus_featured_overrides`, затем могут быть восстановлены.
-- **Отклонены** — можно просмотреть, изменить и окончательно удалить
-  отклонённые заявки. Отклонение сохраняет историю модерации в базе.
+   ```dotenv
+   COMMUNITY_ADMIN_USERNAMES=OgarkovIA
+   COOKIE_SECURE=false
+   SESSION_SECRET=ВСТАВЬ_СВОЙ_СЛУЧАЙНЫЙ_СЕКРЕТ_ДЛИНОЙ_ОТ_32_СИМВОЛОВ
+   ```
 
-`GET /services/admin/groups`, `PATCH /services/admin/submissions/:id`,
-`PATCH /services/admin/groups/:id`, `DELETE /services/admin/groups/:id`
-требуют **серверную сессию и действующий ID в allowlist**.
-Замена иконки: `PATCH /services/admin/groups/:id/icon` с
-`multipart/form-data` и полем `icon` (PNG/JPEG/WebP до 700 КБ).
-Фотографии встроенных групп хранятся в `campus_featured_icons`,
-а созданных пользователями — в `campus_community_icons`.
+   Для генерации `SESSION_SECRET` в PowerShell:
 
-Все изменяющие запросы требуют дополнительный одноразово выданный при входе
-`X-Community-CSRF` (действует до выхода из сессии). Куки имеют `HttpOnly`.
-Flutter хранит сессию только в оперативной памяти, после перезапуска
-нужен новый вход.
+   ```powershell
+   $bytes = New-Object byte[] 48
+   $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+   $rng.GetBytes($bytes)
+   [Convert]::ToBase64String($bytes)
+   $rng.Dispose()
+   ```
 
-### Хранилище
+   Вставь сгенерированную строку вместо примера. **Не добавляй `.env`
+   в GitHub.** Нескольких администраторов можно указать через запятую:
+   `COMMUNITY_ADMIN_USERNAMES=OgarkovIA,SecondAdmin`.
+   Предыдущая настройка `COMMUNITY_ADMIN_USER_IDS` тоже работает,
+   но больше не обязательна.
 
-`campus_communities`, `campus_community_icons` ,
-`campus_featured_overrides` и `campus_featured_icons` создаются при первом обращении к API.
-При отсутствии у DB-пользователя прав на создание таблиц примени
-`migrations/20261025_campus_communities.sql`.
+3. Перезапусти бэкенд и обнови Flutter. Открой
+   **Сервисы → Группы → значок администратора**, введи логин
+   `OgarkovIA` и пароль, с которым регистрировался аккаунт.
 
-Для продакшена следует перейти с стандартного express-session MemoryStore
-на постоянное внешнее хранилище и включить HTTPS с `COOKIE_SECURE=true`.
-Сейчас сценарий предназначен для локальной разработки CampusApp по USB.
+**Как это защищено:** сервер ищет по логину **ровно один** аккаунт,
+проверяет bcrypt-хеш пароля, а затем сверяет логин с `.env`. Если
+имя дублируется в базе, вход блокируется. После конфигурации имя
+администратора нельзя заново зарегистрировать через публичный API.
+Проверка прав и CSRF-токена выполняется на сервере для каждого
+административного запроса. Одного написанного логина недостаточно.
 
-Проверка:
+### Что можно делать
+
+- Проверять, подтверждать, отклонять и удалять пользовательские заявки.
+- Менять названия, описания, категории, ссылки Telegram/VK и картинки.
+- Удалять опубликованные сообщества; встроенные скрывать и восстанавливать.
+
+Маршруты модерации: `GET /services/admin/groups`,
+`PATCH /services/admin/submissions/:id`,
+`PATCH /services/admin/groups/:id`,
+`PATCH /services/admin/groups/:id/icon`,
+`DELETE /services/admin/groups/:id`.
+Все требуют серверную сессию, а изменения — `X-Community-CSRF`.
+
+### Дополнительно
+
+Таблицы `campus_communities`, `campus_community_icons`,
+`campus_featured_overrides` и `campus_featured_icons` создаются
+при первом запросе. Если MySQL не разрешает `CREATE TABLE`,
+примени `migrations/20261025_campus_communities.sql`.
+
+Для продакшена необходимы HTTPS и постоянное хранилище серверных
+сессий; стандартный MemoryStore предназначен только для разработки.
 
 ```powershell
-npm test -- --runInBand community-admin.guard.spec.ts community-admin.service.spec.ts
+npm test -- --runInBand auth.service.spec.ts community-admin.guard.spec.ts community-admin.service.spec.ts
 ```
 
 ## Студенческие сообщества CampusApp
