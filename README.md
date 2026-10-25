@@ -21,6 +21,83 @@
   <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
   [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
+## Администрирование сообществ
+
+**Функция требует настройки.** Сам по себе вход через БАРС не создаёт
+сессию NestJS, поэтому для управления сообществами используется отдельный
+аккаунт бэкенда (`users`).
+
+### Первый запуск для владельца проекта
+
+1. Зарегистрируй собственный аккаунт бэкенда через
+   `POST http://localhost:8000/auth/register` (имя, email, пароль).
+   Используй пароль, которого нет у других аккаунтов.
+   Это обычная регистрация: она **не** выдаёт права администратора.
+2. Найди ID своего аккаунта в MySQL, например через MySQL Workbench:
+
+   ```sql
+   SELECT id, username, email FROM users WHERE email = 'admin@example.com';
+   ```
+
+   Подставь **свой** адрес, не пример из инструкции.
+3. В локальный **`.env`** сервера добавь (ID замени на полученный):
+
+   ```dotenv
+   COMMUNITY_ADMIN_USER_IDS=7
+   SESSION_SECRET=REPLACE_WITH_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
+   COOKIE_SECURE=false
+   ```
+
+   Для генерации секрета открой PowerShell:
+
+   ```powershell
+   $randomBytes = New-Object byte[] 48
+   [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($randomBytes)
+   [Convert]::ToBase64String($randomBytes)
+   ```
+
+   Вставь результат в `SESSION_SECRET`. **Никогда не коммить `.env` в
+   GitHub.** Админ-режим не запустится без достаточно длинного секрета.
+4. Перезапусти бэкенд, обнови Flutter и открой
+   **Сервисы → Группы → значок администратора**.
+   Введи почту и пароль того же аккаунта бэкенда.
+
+### Возможности панели
+
+- **На проверке** — можно подтверждать, отклонять, редактировать и удалять
+  заявки. Подтверждение делает сообщество общедоступным.
+- **Опубликованы** — редактирование названия, описания, категории,
+  резервного значка и ссылок; удаление опубликованных групп.
+- **Скрытые** — встроенные сообщества МЭИ при удалении скрываются через
+  таблицу `campus_featured_overrides`, затем могут быть восстановлены.
+- **Отклонены** — можно просмотреть, изменить и окончательно удалить
+  отклонённые заявки. Отклонение сохраняет историю модерации в базе.
+
+`GET /services/admin/groups`, `PATCH /services/admin/submissions/:id`,
+`PATCH /services/admin/groups/:id`, `DELETE /services/admin/groups/:id`
+требуют **серверную сессию и действующий ID в allowlist**.
+Все изменяющие запросы требуют дополнительный одноразово выданный при входе
+`X-Community-CSRF` (действует до выхода из сессии). Куки имеют `HttpOnly`.
+Flutter хранит сессию только в оперативной памяти, после перезапуска
+нужен новый вход.
+
+### Хранилище
+
+`campus_communities`, `campus_community_icons` и
+`campus_featured_overrides` создаются при первом обращении к API.
+При отсутствии у DB-пользователя прав на создание таблиц примени
+`migrations/20261025_campus_communities.sql`.
+
+Для продакшена следует перейти с стандартного express-session MemoryStore
+на постоянное внешнее хранилище и включить HTTPS с `COOKIE_SECURE=true`.
+Сейчас сценарий предназначен для локальной разработки CampusApp по USB.
+
+Проверка:
+
+```powershell
+npm test -- --runInBand community-admin.guard.spec.ts community-admin.service.spec.ts
+```
+
 ## Студенческие сообщества CampusApp
 
 Ветка `feature/cloud` содержит API каталога сообществ МЭИ:
