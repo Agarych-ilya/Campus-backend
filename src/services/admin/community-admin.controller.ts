@@ -25,14 +25,20 @@ import {
 import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthService } from '../../auth/auth.service';
-import { LoginDto } from '../../auth/dto/create-auth.dto';
+import {
+  communityAdminEnabled,
+  allowedCommunityAdminIds,
+  allowedCommunityAdminUsernames,
+  normalizeAccountUsername,
+} from '../../auth/admin_identity';
 import { CommunityAdminService } from './community-admin.service';
 import type { CommunityAdminItem } from './community-admin.service';
+import { CommunityAdminGuard } from './community-admin.guard';
 import {
-  allowedCommunityAdminIds,
-  CommunityAdminGuard,
-} from './community-admin.guard';
-import { ReviewCommunityDto, UpdateCommunityDto } from './community-admin.dto';
+  CommunityAdminLoginDto,
+  ReviewCommunityDto,
+  UpdateCommunityDto,
+} from './community-admin.dto';
 
 const validate = new ValidationPipe({
   whitelist: true,
@@ -48,30 +54,35 @@ export class CommunityAdminController {
   ) {}
 
   /**
-   * Admins use an existing backend account and server-side allowlisted ID.
+   * Admins use their existing backend username and password.
+   * Allowed usernames or legacy IDs are configured only on the server.
    * The normal BARS webview is unrelated to server-side authentication.
    */
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @UsePipes(validate)
-  async login(@Body() dto: LoginDto, @Req() req: any) {
-    const allowed = allowedCommunityAdminIds();
-    if (allowed.size === 0) {
+  async login(@Body() dto: CommunityAdminLoginDto, @Req() req: any) {
+    if (!communityAdminEnabled()) {
       throw new ServiceUnavailableException(
-        'Список администраторов не настроен на сервере',
+        'Администратор не настроен на сервере',
       );
     }
 
-    let id: number;
+    let user: { id: number; username: string; email: string };
     try {
-      const user = await this.auth.login(dto);
-      id = Number(user.id);
+      user = await this.auth.loginByUsername(dto.username, dto.password);
     } catch {
-      // No account enumeration, even for the admin-only endpoint.
-      throw new UnauthorizedException('Неверные данные для входа');
+      // A bad password, nonexistent username and duplicate username
+      // must all receive the same generic login error.
+      throw new UnauthorizedException('Неверный логин или пароль');
     }
 
-    if (!Number.isSafeInteger(id) || !allowed.has(id)) {
+    const id = Number(user.id);
+    const accountUsername = normalizeAccountUsername(user.username);
+    const enabledForAccount = allowedCommunityAdminIds().has(id) ||
+      allowedCommunityAdminUsernames().has(accountUsername);
+
+    if (!Number.isSafeInteger(id) || id < 1 || !enabledForAccount) {
       throw new UnauthorizedException('Нет прав администратора');
     }
 
@@ -80,6 +91,7 @@ export class CommunityAdminController {
       req.session.regenerate((error) => error ? reject(error) : resolve()),
     );
     (req.session as any).communityAdminUserId = id;
+    (req.session as any).communityAdminUsername = accountUsername;
     const csrfToken = randomBytes(32).toString('hex');
     (req.session as any).communityAdminCsrf = csrfToken;
     await new Promise<void>((resolve, reject) =>
