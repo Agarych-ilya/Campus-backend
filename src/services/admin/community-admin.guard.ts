@@ -26,7 +26,7 @@ export function allowedCommunityAdminIds(): Set<number> {
 export class CommunityAdminGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
-    const userId = (request.session as any)?.communityAdminUserId;
+    const userId = ((request as any).session as any)?.communityAdminUserId;
 
     if (
       !Number.isSafeInteger(userId) ||
@@ -38,7 +38,7 @@ export class CommunityAdminGuard implements CanActivate {
     // Double-submit and cross-site POST protection: the token is returned
     // only after password login and is never placed in a browser cookie.
     if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
-      const expected = (request.session as any)?.communityAdminCsrf;
+      const expected = ((request as any).session as any)?.communityAdminCsrf;
       const actual = request.headers['x-community-csrf'];
       if (
         typeof expected !== 'string' ||
