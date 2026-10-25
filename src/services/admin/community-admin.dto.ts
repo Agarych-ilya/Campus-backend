@@ -64,6 +64,17 @@ export class CommunityAdminLoginDto {
   password!: string;
 }
 
+/**
+ * BARS cookies are a short-lived proof submitted by the WebView only.
+ * The server must independently retrieve and verify the user's BARS page.
+ */
+export class BarsSessionLoginDto {
+  @IsString()
+  @MinLength(5)
+  @MaxLength(8192)
+  cookieHeader!: string;
+}
+
 export class ReviewCommunityDto {
   @IsIn(['approved', 'rejected'])
   status!: 'approved' | 'rejected';
