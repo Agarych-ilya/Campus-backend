@@ -29,7 +29,7 @@ export interface Community {
   vkUrl: string | null;
 }
 
-const featuredCommunities: readonly Community[] = [
+export const featuredCommunities: readonly Community[] = [
   {
     id: 'mpeichat',
     title: 'Чат студентов МЭИ',
@@ -178,11 +178,40 @@ export class ServicesService {
    * Database outages never hide the built-in community links.
    */
   async getGroups(): Promise<Community[]> {
-    const featured = featuredCommunities.map((community) => ({ ...community }));
+    let featured = featuredCommunities.map((community) => ({ ...community }));
     let approved: Community[] = featured;
 
     try {
       await this.ensureTable();
+      const overrides = (await this.db.query(
+        'SELECT id, title, description, category, icon_kind, ' +
+          'telegram_url, vk_url, hidden FROM campus_featured_overrides',
+      )) as Array<{
+        id: string;
+        title: string;
+        description: string;
+        category: string;
+        icon_kind: string;
+        telegram_url: string | null;
+        vk_url: string | null;
+        hidden: number;
+      }>;
+      const map = new Map(overrides.map((row) => [row.id, row]));
+      featured = featured.flatMap((original) => {
+        const override = map.get(original.id);
+        if (!override) return [original];
+        if (Boolean(override.hidden)) return [];
+        return [{
+          ...original,
+          title: override.title,
+          description: override.description,
+          category: override.category,
+          subtitle: override.category,
+          iconKind: override.icon_kind,
+          telegramUrl: override.telegram_url,
+          vkUrl: override.vk_url,
+        }];
+      });
       const rows = (await this.db.query(
         'SELECT c.id, c.title, c.description, c.category, c.icon_kind, ' +
           'c.telegram_url, c.vk_url, i.community_id AS icon_uploaded ' +
@@ -465,7 +494,7 @@ export class ServicesService {
     return 'https://' + host + '/' + slug;
   }
 
-  private async ensureTable(): Promise<void> {
+  async ensureTable(): Promise<void> {
     if (this.tableReady === null) {
       this.tableReady = (async () => {
         await this.db.query(
@@ -488,6 +517,18 @@ export class ServicesService {
             'community_id BIGINT UNSIGNED NOT NULL PRIMARY KEY, ' +
             'icon_mime VARCHAR(16) NOT NULL, ' +
             'icon_data MEDIUMBLOB NOT NULL' +
+            ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_featured_overrides (' +
+            'id VARCHAR(64) NOT NULL PRIMARY KEY, ' +
+            'title VARCHAR(80) NOT NULL, ' +
+            'description TEXT NOT NULL, ' +
+            'category VARCHAR(40) NOT NULL, ' +
+            'icon_kind VARCHAR(20) NOT NULL, ' +
+            'telegram_url VARCHAR(512) NULL, ' +
+            'vk_url VARCHAR(512) NULL, ' +
+            'hidden TINYINT(1) NOT NULL DEFAULT 0' +
             ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
         );
       })().catch((error: unknown) => {
