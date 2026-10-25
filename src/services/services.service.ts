@@ -208,7 +208,7 @@ export class ServicesService {
           return [{
             ...original,
             iconUrl: featuredIconIds.has(original.id)
-              ? '/services/groups/featured-icons/' + original.id : null,
+              ? '/services/groups/featured-icons/' + original.id + '?v=' + Date.now() : null,
           }];
         }
         return [{
@@ -251,7 +251,7 @@ export class ServicesService {
           memberCountCheckedAt: null,
           memberCountApproximate: false,
           iconUrl: row.icon_uploaded
-            ? '/services/groups/icons/' + String(row.id)
+            ? '/services/groups/icons/' + String(row.id) + '?v=' + Date.now()
             : null,
           telegramUrl,
           vkUrl: row.vk_url,
