@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import {
   Body,
   Controller,
@@ -74,11 +76,13 @@ export class CommunityAdminController {
       req.session.regenerate((error) => error ? reject(error) : resolve()),
     );
     (req.session as any).communityAdminUserId = id;
+    const csrfToken = randomBytes(32).toString('hex');
+    (req.session as any).communityAdminCsrf = csrfToken;
     await new Promise<void>((resolve, reject) =>
       req.session.save((error) => error ? reject(error) : resolve()),
     );
 
-    return { isAdmin: true };
+    return { isAdmin: true, csrfToken };
   }
 
   @Get('me')
