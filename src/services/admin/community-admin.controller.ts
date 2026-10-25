@@ -27,6 +27,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthService } from '../../auth/auth.service';
 import { LoginDto } from '../../auth/dto/create-auth.dto';
 import { CommunityAdminService } from './community-admin.service';
+import type { CommunityAdminItem } from './community-admin.service';
 import {
   allowedCommunityAdminIds,
   CommunityAdminGuard,
@@ -106,7 +107,7 @@ export class CommunityAdminController {
 
   @Get('groups')
   @UseGuards(CommunityAdminGuard)
-  getAll(@Query('status') status = 'all') {
+  getAll(@Query('status') status = 'all'): Promise<CommunityAdminItem[]> {
     return this.service.list(status);
   }
 
