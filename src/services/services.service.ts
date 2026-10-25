@@ -221,7 +221,7 @@ export class ServicesService {
           telegramUrl: override.telegram_url,
           vkUrl: override.vk_url,
           iconUrl: featuredIconIds.has(original.id)
-            ? '/services/groups/featured-icons/' + original.id : null,
+            ? '/services/groups/featured-icons/' + original.id + '?v=' + Date.now() : null,
         }];
       });
       const rows = (await this.db.query(
