@@ -60,6 +60,10 @@ export class CommunityAdminService {
         'vk_url, hidden FROM campus_featured_overrides',
     )) as OverrideRow[];
     const overridesById = new Map(overrides.map((row) => [row.id, row]));
+    const featuredIcons = (await this.db.query(
+      'SELECT id FROM campus_featured_icons',
+    )) as Array<{ id: string }>;
+    const featuredIconIds = new Set(featuredIcons.map((row) => row.id));
 
     const seeds: CommunityAdminItem[] = featuredCommunities.map((base) => {
       const row = overridesById.get(base.id);
@@ -72,6 +76,9 @@ export class CommunityAdminService {
         iconKind: row?.icon_kind ?? base.iconKind,
         telegramUrl: row ? row.telegram_url : base.telegramUrl,
         vkUrl: row ? row.vk_url : base.vkUrl,
+        iconUrl: featuredIconIds.has(base.id)
+          ? '/services/groups/featured-icons/' + base.id
+          : null,
         status: row?.hidden ? 'hidden' : 'approved',
         builtIn: true,
       };
@@ -251,6 +258,41 @@ export class CommunityAdminService {
     );
 
     return { id, deleted: true };
+  }
+
+  async updateIcon(id: string, file: Express.Multer.File | undefined) {
+    if (!file) {
+      throw new BadRequestException('Выбери изображение сообщества');
+    }
+    const icon = this.services.validateIcon(file);
+    await this.services.ensureTable();
+
+    const seed = featuredCommunities.find((item) => item.id === id);
+    if (seed) {
+      await this.db.query(
+        'INSERT INTO campus_featured_icons (id, icon_mime, icon_data) ' +
+          'VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE ' +
+          'icon_mime = VALUES(icon_mime), icon_data = VALUES(icon_data)',
+        [id, icon.mime, icon.bytes],
+      );
+      return { id, updated: true };
+    }
+
+    const numericId = this.customId(id);
+    const rows = (await this.db.query(
+      'SELECT id FROM campus_communities WHERE id = ? LIMIT 1',
+      [numericId],
+    )) as Array<{ id: number }>;
+    if (!rows.length) throw new NotFoundException('Сообщество не найдено');
+
+    await this.db.query(
+      'INSERT INTO campus_community_icons ' +
+        '(community_id, icon_mime, icon_data) VALUES (?, ?, ?) ' +
+        'ON DUPLICATE KEY UPDATE ' +
+        'icon_mime = VALUES(icon_mime), icon_data = VALUES(icon_data)',
+      [numericId, icon.mime, icon.bytes],
+    );
+    return { id, updated: true };
   }
 
   /** Admin preview of unapproved images. This method is guard-protected. */
