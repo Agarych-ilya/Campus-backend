@@ -6,9 +6,19 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 
+export function allowedCommunityAdminIds(): Set<number> {
+  return new Set(
+    (process.env.COMMUNITY_ADMIN_USER_IDS ?? '')
+      .split(',')
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isSafeInteger(value) && value > 0),
+  );
+}
+
 /**
- * The Flutter UI is never trusted to decide administrator permissions.
- * Only a valid server-side session established by the admin login may mutate.
+ * Never trust a client-side flag, email field or user-controlled ID.
+ * The account must have passed backend password authentication and still
+ * appear in the server administrator allowlist on every protected request.
  */
 @Injectable()
 export class CommunityAdminGuard implements CanActivate {
@@ -16,7 +26,10 @@ export class CommunityAdminGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<Request>();
     const userId = (request.session as any)?.communityAdminUserId;
 
-    if (!Number.isSafeInteger(userId) || userId < 1) {
+    if (
+      !Number.isSafeInteger(userId) ||
+      !allowedCommunityAdminIds().has(userId)
+    ) {
       throw new ForbiddenException('Требуется вход администратора');
     }
     return true;
