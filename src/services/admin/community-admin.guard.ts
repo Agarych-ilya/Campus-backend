@@ -11,6 +11,8 @@ import {
   allowedCommunityAdminIds,
   allowedCommunityAdminUsernames,
   normalizeAccountUsername,
+  allowedCommunityAdminBarsRecordBooks,
+  normalizeBarsRecordBook,
 } from '../../auth/admin_identity';
 
 // Backward-compatible export for existing guard tests.
@@ -28,7 +30,7 @@ export class CommunityAdminGuard implements CanActivate {
     const userId = session?.communityAdminUserId;
     const username = session?.communityAdminUsername;
 
-    const permitted =
+    const hasBackendLogin =
       Number.isSafeInteger(userId) &&
       userId > 0 &&
       typeof username === 'string' &&
@@ -38,6 +40,20 @@ export class CommunityAdminGuard implements CanActivate {
           normalizeAccountUsername(username),
         )
       );
+
+    const barsRecordBook = session?.communityAdminBarsRecordBook;
+    const verifiedAt = session?.communityAdminBarsVerifiedAt;
+    const hasVerifiedBarsLogin =
+      typeof barsRecordBook === 'string' &&
+      typeof verifiedAt === 'number' &&
+      Number.isFinite(verifiedAt) &&
+      verifiedAt <= Date.now() &&
+      Date.now() - verifiedAt < 30 * 60 * 1000 &&
+      allowedCommunityAdminBarsRecordBooks().has(
+        normalizeBarsRecordBook(barsRecordBook),
+      );
+
+    const permitted = hasBackendLogin || hasVerifiedBarsLogin;
 
     if (!permitted) {
       throw new ForbiddenException('Требуется вход администратора');
