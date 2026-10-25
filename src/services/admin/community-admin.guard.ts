@@ -1,3 +1,5 @@
+import { timingSafeEqual } from 'node:crypto';
+
 import {
   CanActivate,
   ExecutionContext,
@@ -31,6 +33,21 @@ export class CommunityAdminGuard implements CanActivate {
       !allowedCommunityAdminIds().has(userId)
     ) {
       throw new ForbiddenException('Требуется вход администратора');
+    }
+
+    // Double-submit and cross-site POST protection: the token is returned
+    // only after password login and is never placed in a browser cookie.
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
+      const expected = (request.session as any)?.communityAdminCsrf;
+      const actual = request.headers['x-community-csrf'];
+      if (
+        typeof expected !== 'string' ||
+        typeof actual !== 'string' ||
+        expected.length !== actual.length ||
+        !timingSafeEqual(Buffer.from(expected), Buffer.from(actual))
+      ) {
+        throw new ForbiddenException('Необходимо обновить сессию администратора');
+      }
     }
     return true;
   }
