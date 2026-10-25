@@ -8,6 +8,9 @@ import * as cheerio from 'cheerio';
 
 type MpeiGroupSearchItem = {
     id: string | number;
+    name?: string;
+    label?: string;
+    value?: string;
 };
 
 export type ScheduleLesson = {
@@ -115,27 +118,92 @@ export class ScheduleService {
     }
 
     private async getGroupId(group: string): Promise<string> {
-        const encodedGroup = encodeURIComponent(group);
-
-        const url = `https://ts.mpei.ru/api/search?term=${encodedGroup}&type=group`;
-
-        const { data } = await axios.get<MpeiGroupSearchItem[]>(url, {
-            timeout: 15000,
-            headers: {
-                accept: 'application/json, text/plain, */*',
-                'accept-language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-                'user-agent':
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-                referer: 'https://ts.mpei.ru/ruz/main',
-                connection: 'close',
-            },
-        });
-
-        if (!Array.isArray(data) || data.length === 0) {
-            throw new NotFoundException('Группа не найдена');
+        const normalizedGroup = group.trim();
+        if (!normalizedGroup) {
+            throw new NotFoundException('Название учебной группы не указано');
         }
 
-        return String(data[0].id);
+        const encodedGroup = encodeURIComponent(normalizedGroup);
+        let lastError: unknown;
+
+        // The MPEI portal advertises an HTTP RUZ URL. Try HTTPS first and
+        // fall back to the university's published HTTP endpoint if TLS fails.
+        for (const origin of ['https://ts.mpei.ru', 'http://ts.mpei.ru']) {
+            const url = origin + '/api/search?term=' + encodedGroup + '&type=group';
+
+            try {
+                const { data } = await axios.get<unknown>(url, {
+                    timeout: 10000,
+                    maxRedirects: 5,
+                    headers: {
+                        accept: 'application/json, text/plain, */*',
+                        'accept-language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+                        'user-agent':
+                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+                        referer: 'https://ts.mpei.ru/ruz/main',
+                        connection: 'close',
+                    },
+                });
+
+                const payload = data as {
+                    data?: unknown;
+                    results?: unknown;
+                } | null;
+
+                const candidates: unknown = Array.isArray(data)
+                    ? data
+                    : Array.isArray(payload?.data)
+                      ? payload.data
+                      : payload?.results;
+
+                if (!Array.isArray(candidates) || candidates.length === 0) {
+                    throw new NotFoundException(
+                        'Учебная группа «' + normalizedGroup + '» не найдена в РУЗ МЭИ',
+                    );
+                }
+
+                const results = candidates.filter(
+                    (item): item is MpeiGroupSearchItem =>
+                        item !== null &&
+                        typeof item === 'object' &&
+                        'id' in item &&
+                        (typeof item.id === 'string' ||
+                            typeof item.id === 'number'),
+                );
+
+                const normalize = (value: string) =>
+                    value.toLocaleLowerCase('ru-RU').replace(/\s+/g, '');
+
+                const requested = normalize(normalizedGroup);
+                const exact = results.find((item) =>
+                    [item.name, item.label, item.value].some(
+                        (name) =>
+                            typeof name === 'string' &&
+                            normalize(name) === requested,
+                    ),
+                );
+
+                const groupId = String((exact ?? results[0])?.id ?? '');
+
+                if (!/^\d+$/.test(groupId)) {
+                    throw new NotFoundException(
+                        'Не удалось определить код группы «' + normalizedGroup + '»',
+                    );
+                }
+
+                return groupId;
+            } catch (error) {
+                if (error instanceof NotFoundException) {
+                    throw error;
+                }
+                lastError = error;
+            }
+        }
+
+        console.error('MPEI group search failed:', lastError);
+        throw new ServiceUnavailableException(
+            'Не удалось подключиться к поиску учебных групп РУЗ МЭИ',
+        );
     }
 
     private async loadMpeiPage(url: string): Promise<string> {
