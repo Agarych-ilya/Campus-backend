@@ -5,8 +5,22 @@ import session from 'express-session';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // Native Flutter HTTP clients do not send an Origin header.
+  // Allow explicit trusted web frontends only; never reflect arbitrary origins
+  // when administrator session cookies are enabled.
+  const browserOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
   app.enableCors({
-    origin: true,
+    origin: (origin, callback) => {
+      if (!origin || browserOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Origin is not authorized for this API'), false);
+      }
+    },
     credentials: true,
   });
 
