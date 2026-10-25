@@ -19,7 +19,8 @@ export interface Community {
   category: string;
   iconKind: string;
   memberCount: number | null;
-  memberCountSource: 'self_reported' | null;
+  memberCountSource: 'self_reported' | 'telegram_snapshot' | null;
+  memberCountAsOf?: string | null;
   telegramUrl: string | null;
   vkUrl: string | null;
 }
@@ -66,10 +67,59 @@ const featuredCommunities: readonly Community[] = [
       'из жизни МЭИ. Контент и правила доступны по ссылке.',
     category: 'Новости и мемы',
     iconKind: 'news',
-    memberCount: null,
-    memberCountSource: null,
+    memberCount: 2392,
+    memberCountSource: 'telegram_snapshot',
+    memberCountAsOf: '2026-10-25',
     telegramUrl: 'https://t.me/MPEImai',
     vkUrl: null,
+  },
+  {
+    id: 'mpeiuniversity',
+    title: 'НИУ «МЭИ» | Официальный канал',
+    username: 'mpeiuniversity',
+    subtitle: 'Новости университета и объявления',
+    description:
+      'Официальный канал НИУ «МЭИ». Новости университета, мероприятия, ' +
+      'объявления и важная информация для студентов и абитуриентов.',
+    category: 'Новости университета',
+    iconKind: 'campus',
+    memberCount: 12091,
+    memberCountSource: 'telegram_snapshot',
+    memberCountAsOf: '2026-10-25',
+    telegramUrl: 'https://t.me/mpeiuniversity',
+    vkUrl: 'https://vk.com/mpei_ru',
+  },
+  {
+    id: 'mpei_profcom',
+    title: 'Профком студентов МЭИ',
+    username: 'mpei_profcom',
+    subtitle: 'Права, поддержка и возможности студентов',
+    description:
+      'Информационный канал профсоюзной организации обучающихся МЭИ. ' +
+      'Новости, студенческие инициативы и полезные объявления.',
+    category: 'Новости университета',
+    iconKind: 'club',
+    memberCount: 2625,
+    memberCountSource: 'telegram_snapshot',
+    memberCountAsOf: '2026-10-25',
+    telegramUrl: 'https://t.me/mpei_profcom',
+    vkUrl: 'https://vk.com/profcom_mpei',
+  },
+  {
+    id: 'oss_mpei',
+    title: 'Объединённый студсовет МЭИ',
+    username: 'oss_mpei',
+    subtitle: 'Студенческое самоуправление и события',
+    description:
+      'Объединённый студенческий совет МЭИ. Новости проектов, ' +
+      'инициатив и мероприятий университетского сообщества.',
+    category: 'Новости университета',
+    iconKind: 'events',
+    memberCount: 2799,
+    memberCountSource: 'telegram_snapshot',
+    memberCountAsOf: '2026-10-25',
+    telegramUrl: 'https://t.me/oss_mpei',
+    vkUrl: 'https://vk.com/oss_mpei',
   },
 ];
 
@@ -135,6 +185,7 @@ export class ServicesService {
             row.member_count === null ? null : Number(row.member_count),
           memberCountSource:
             row.member_count === null ? null : 'self_reported',
+          memberCountAsOf: null,
           telegramUrl,
           vkUrl: row.vk_url,
         };
