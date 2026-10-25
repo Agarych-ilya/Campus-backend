@@ -175,7 +175,7 @@ export class ServicesService {
 
   /**
    * Public catalog: built-in communities and manually approved submissions.
-   * Database outages never hide the built-in community links.
+   * On DB outages fail closed so moderator-hidden groups stay hidden.
    */
   async getGroups(): Promise<Community[]> {
     let featured = featuredCommunities.map((community) => ({ ...community }));
