@@ -39,6 +39,13 @@ CREATE TABLE IF NOT EXISTS campus_featured_overrides (
   hidden TINYINT(1) NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Moderator-selected images for the six built-in communities.
+CREATE TABLE IF NOT EXISTS campus_featured_icons (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  icon_mime VARCHAR(16) NOT NULL,
+  icon_data MEDIUMBLOB NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- The public API only returns approved submissions.
 -- Moderators review pending entries directly in MySQL for this MVP:
 -- SELECT id, title, description, telegram_url, vk_url, member_count,
