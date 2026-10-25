@@ -21,6 +21,280 @@
   <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
   [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
+## Администрирование сообществ: назначение по логину
+
+Администратором можно назначить **конкретный аккаунт бэкенда по логину**,
+например `OgarkovIA`. ID из MySQL Workbench искать не требуется.
+
+**Важно:** обычный вход в CampusApp через БАРС использует WebView и
+сохраняет учебный профиль локально. Он НЕ подтверждает серверу личность
+администратора. В панели «Группы → Управление» требуется отдельный
+вход **логин + пароль аккаунта Campus-backend**.
+
+### Исправление ошибки отсутствующей таблицы users
+
+Если в логах было `ER_NO_SUCH_TABLE: Table 'campus.users' doesn't exist`,
+обнови ветку `feature/cloud`. Теперь `AuthService` автоматически создаёт
+недостающую таблицу `users` **при первой попытке регистрации или входа**
+и повторяет запрос. Если таблица уже существует, никаких изменений в
+её схему и содержимое не вносится.
+
+Таблица создаётся в базе, указанной в локальном `DB_NAME` (при
+отсутствии этого параметра используется `campus`). Сначала проверь,
+что ты подключаешься к нужной базе: если пользователи уже существуют
+в другой базе, нужно выбрать правильное значение `DB_NAME`, а не
+создавать второй набор аккаунтов.
+
+Для автоматического создания таблицы у DB-пользователя должно быть
+право `CREATE TABLE`. Если такого права нет, администратор MySQL может
+один раз применить миграцию `migrations/20261025_users.sql`.
+
+Для локальной регистрации заранее **не добавляй новый логин**
+в `COMMUNITY_ADMIN_USERNAMES`: иначе имя будет зарезервировано
+от публичной регистрации. Сначала создай обычный аккаунт с выбранным
+паролем, затем добавь его имя в список администраторов и перезапусти сервер.
+
+### Первоначальная настройка
+
+1. **Если аккаунт `OgarkovIA` уже зарегистрирован в таблице `users`**
+   через `POST /auth/register`, переходи сразу к шагу 2.
+
+   Если аккаунта ещё нет, зарегистрируй его **до включения админ-имени
+   в `.env`**. Запрос требует `username`, `email`, `password`:
+
+   ```powershell
+   $login = 'OgarkovIA'
+   $email = Read-Host 'Email для регистрации'
+   $password = Read-Host 'Новый пароль' -AsSecureString
+   $body = @{
+     username = $login
+     email = $email
+     password = [System.Net.NetworkCredential]::new('', $password).Password
+   } | ConvertTo-Json
+   Invoke-RestMethod -Uri 'http://localhost:8000/auth/register' -Method Post -ContentType 'application/json' -Body $body
+   Remove-Variable body, password
+   ```
+
+   Email нужен **только для регистрации аккаунта**. При входе
+   администратора он больше не вводится и не проверяется.
+   Не используй пароль БАРС: создай отдельный надёжный пароль.
+
+2. В локальный `.env` бэкенда добавь:
+
+   ```dotenv
+   COMMUNITY_ADMIN_USERNAMES=OgarkovIA
+   COOKIE_SECURE=false
+   SESSION_SECRET=ВСТАВЬ_СВОЙ_СЛУЧАЙНЫЙ_СЕКРЕТ_ДЛИНОЙ_ОТ_32_СИМВОЛОВ
+   ```
+
+   Для генерации `SESSION_SECRET` в PowerShell:
+
+   ```powershell
+   $bytes = New-Object byte[] 48
+   $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+   $rng.GetBytes($bytes)
+   [Convert]::ToBase64String($bytes)
+   $rng.Dispose()
+   ```
+
+   Вставь сгенерированную строку вместо примера. **Не добавляй `.env`
+   в GitHub.** Нескольких администраторов можно указать через запятую:
+   `COMMUNITY_ADMIN_USERNAMES=OgarkovIA,SecondAdmin`.
+   Предыдущая настройка `COMMUNITY_ADMIN_USER_IDS` тоже работает,
+   но больше не обязательна.
+
+3. Перезапусти бэкенд и обнови Flutter. Открой
+   **Сервисы → Группы → значок администратора**, введи логин
+   `OgarkovIA` и пароль, с которым регистрировался аккаунт.
+
+**Как это защищено:** сервер ищет по логину **ровно один** аккаунт,
+проверяет bcrypt-хеш пароля, а затем сверяет логин с `.env`. Если
+имя дублируется в базе, вход блокируется. После конфигурации имя
+администратора нельзя заново зарегистрировать через публичный API.
+Проверка прав и CSRF-токена выполняется на сервере для каждого
+административного запроса. Одного написанного логина недостаточно.
+
+### Что можно делать
+
+- Проверять, подтверждать, отклонять и удалять пользовательские заявки.
+- Менять названия, описания, категории, ссылки Telegram/VK и картинки.
+- Удалять опубликованные сообщества; встроенные скрывать и восстанавливать.
+
+Маршруты модерации: `GET /services/admin/groups`,
+`PATCH /services/admin/submissions/:id`,
+`PATCH /services/admin/groups/:id`,
+`PATCH /services/admin/groups/:id/icon`,
+`DELETE /services/admin/groups/:id`.
+Все требуют серверную сессию, а изменения — `X-Community-CSRF`.
+
+### Дополнительно
+
+Таблицы `campus_communities`, `campus_community_icons`,
+`campus_featured_overrides` и `campus_featured_icons` создаются
+при первом запросе. Если MySQL не разрешает `CREATE TABLE`,
+примени `migrations/20261025_campus_communities.sql`.
+
+Для продакшена необходимы HTTPS и постоянное хранилище серверных
+сессий; стандартный MemoryStore предназначен только для разработки.
+
+```powershell
+npm test -- --runInBand auth.service.spec.ts community-admin.guard.spec.ts community-admin.service.spec.ts
+```
+
+## Студенческие сообщества CampusApp
+
+Ветка `feature/cloud` содержит API каталога сообществ МЭИ:
+
+- `GET /services/groups` — возвращает встроенные и одобренные группы:
+  описание, Telegram/VK, автоматически полученную численность
+  `memberCount`, источник `memberCountSource` (`telegram`/`vk`),
+  время `memberCountCheckedAt` и признак приблизительного значения
+  `memberCountApproximate`. Пример: страница Telegram может показывать
+  `12.1K subscribers`, и тогда число помечается как приблизительное.
+- `POST /services/groups/submissions` — запрос `multipart/form-data`:
+  название `title`, `description`, `category`, `iconKind` (тип
+  резервной пиктограммы), `telegramUrl` и/или `vkUrl` и выбранная
+  пользователем картинка `icon` (PNG/JPEG/WebP, до 700 КБ).
+  Ответ `202 Accepted` и `{ "id": 123, "status": "pending" }`.
+  Старое поле `memberCount` сохраняется в DTO только для совместимости
+  с прежними клиентами, но **сервер его игнорирует**.
+- `GET /services/groups/icons/:id` — выдаёт выбранную автором иконку,
+  только если модератор одобрил соответствующее сообщество.
+
+### Получение численности из соцсетей
+
+Бэкенд регулярно обновляет статистику **при запросе каталога**, кешируя
+её на 15 минут. Число нельзя указать вручную. Записи в каталоге остаются
+доступными, даже если платформа не отдала число.
+
+Для Telegram сервер пытается получить число из публичной страницы
+`https://t.me/<username>` (доступность счётчика зависит от настроек
+сообщества). Если в `.env` настроен `TELEGRAM_BOT_TOKEN`, дополнительно
+используется официальный Bot API `getChatMemberCount`. Для закрытых
+групп бот должен иметь необходимый доступ; некоторые чаты не отдают
+численность без вступления бота.
+
+Для VK сервер вызывает `groups.getById` с `fields=members_count`
+через API ВКонтакте. Требуется действующий `VK_ACCESS_TOKEN` в
+локальном `.env` бэкенда; токен **никогда не добавляй в GitHub и
+не передавай во Flutter**. Когда у сообщества две ссылки, сначала
+используется счётчик Telegram, затем VK при недоступности первого.
+
+В `.env.example` добавлены необязательные переменные:
+```dotenv
+TELEGRAM_BOT_TOKEN=
+VK_ACCESS_TOKEN=
+```
+
+### Хранение и модерация
+
+Таблицы `campus_communities` и `campus_community_icons` создаются
+при первом обращении к каталогу, если у пользователя MySQL есть право
+`CREATE TABLE`. Если разрешения нет, примени SQL-файл
+`migrations/20261025_campus_communities.sql` вручную.
+
+Загруженные картинки хранятся отдельно в MySQL; публикуются только
+после одобрения. Новые заявки всегда имеют `status = 'pending'`.
+Для текущего MVP модератор проверяет их вручную в MySQL:
+
+```sql
+SELECT id, title, description, telegram_url, vk_url, created_at
+FROM campus_communities
+WHERE status = 'pending' ORDER BY created_at DESC;
+
+UPDATE campus_communities
+SET status = 'approved'
+WHERE id = 123 AND status = 'pending';
+
+-- Или отклонить:
+UPDATE campus_communities
+SET status = 'rejected'
+WHERE id = 123 AND status = 'pending';
+```
+
+Проверяй описание, ссылки и изображения до публикации.
+Сейчас реализовано простое ограничение по IP (одна заявка за 10 минут
+в рамках одного процесса). Перед публичным релизом потребуется
+авторизация заявок, постоянный rate limiter и панель модератора.
+
+Тесты (запуск из папки бэкенда):
+
+```powershell
+npm test -- --runInBand services.service.spec.ts community-stats.service.spec.ts
+```
+
+## CampusApp services API
+
+The backend exposes a read-only catalog used by the Flutter application's
+**Services → Groups** section:
+
+```http
+GET /services/groups
+```
+
+Example response:
+
+```json
+[
+  {
+    "title": "Чат студентов МЭИ",
+    "username": "mpeichat",
+    "subtitle": "Telegram · общение студентов"
+  },
+  {
+    "title": "Первый курс МЭИ",
+    "username": "mpei_1kurs",
+    "subtitle": "Telegram · первокурсники"
+  },
+  {
+    "title": "Подслушано МЭИ",
+    "username": "MPEImai",
+    "subtitle": "Telegram · канал"
+  }
+]
+```
+
+The directory is deliberately public and read-only: it contains only
+public Telegram usernames and never holds student credentials or NFC card IDs.
+Edit `src/services/services.service.ts` to curate the catalog.
+The Flutter client validates Telegram handles and falls back to its bundled
+list when the server cannot be reached.
+
+Run the backend with `npm run start:dev`, then test locally with
+`curl http://localhost:8000/services/groups`.
+
+## CampusApp schedule API
+
+The `feature/cloud` branch also serves the app's weekly schedule:
+
+```http
+GET /health
+GET /schedule?group=А-03-23&date=2026-10-19
+```
+
+The `date` parameter is ISO `YYYY-MM-DD`. The server normalizes to
+Monday, searches for the selected group in the public MPEI RUZ service,
+loads the weekly timetable and returns
+`{ "group": "...", "date": "YYYY-MM-DD", "lessons": [...] }`.
+
+If the group is not found, the server returns 404. If the upstream
+RUZ lookup or MPEI timetable is unavailable, it returns 503 instead of
+silently reporting no lessons. The backend must be running and reachable
+from the Android emulator (`10.0.2.2:8000`) or an actual phone
+(the PC's LAN address) for online scheduling.
+
+PowerShell health check:
+
+```powershell
+curl.exe http://localhost:8000/health
+```
+
+Schedule lookup tests:
+
+```bash
+npm test -- --runInBand schedule.service.spec.ts
+```
+
 ## Description
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
