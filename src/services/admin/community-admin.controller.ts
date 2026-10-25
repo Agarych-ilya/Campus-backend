@@ -18,6 +18,7 @@ import {
   UploadedFile,
   UseInterceptors,
   ServiceUnavailableException,
+  ForbiddenException,
   UseGuards,
   UsePipes,
   ValidationPipe,
@@ -30,12 +31,16 @@ import {
   allowedCommunityAdminIds,
   allowedCommunityAdminUsernames,
   normalizeAccountUsername,
+  allowedCommunityAdminBarsRecordBooks,
+  normalizeBarsRecordBook,
 } from '../../auth/admin_identity';
 import { CommunityAdminService } from './community-admin.service';
 import type { CommunityAdminItem } from './community-admin.service';
 import { CommunityAdminGuard } from './community-admin.guard';
+import { BarsSessionVerifier } from './bars-session-verifier.service';
 import {
   CommunityAdminLoginDto,
+  BarsSessionLoginDto,
   ReviewCommunityDto,
   UpdateCommunityDto,
 } from './community-admin.dto';
@@ -51,6 +56,7 @@ export class CommunityAdminController {
   constructor(
     private readonly service: CommunityAdminService,
     private readonly auth: AuthService,
+    private readonly barsVerifier: BarsSessionVerifier,
   ) {}
 
   /**
@@ -98,6 +104,59 @@ export class CommunityAdminController {
       req.session.save((error) => error ? reject(error) : resolve()),
     );
 
+    return { isAdmin: true, csrfToken };
+  }
+
+  /**
+   * No second password: validate an existing BARS WebView session by fetching
+   * the actual authenticated student pages on the server. The only admin
+   * identifier is the verified record-book number from those pages.
+   */
+  @Post('bars-login')
+  @HttpCode(HttpStatus.OK)
+  @UsePipes(validate)
+  async loginFromBars(
+    @Body() dto: BarsSessionLoginDto,
+    @Req() req: any,
+  ) {
+    const allowlisted = allowedCommunityAdminBarsRecordBooks();
+    if (allowlisted.size === 0) {
+      throw new ServiceUnavailableException(
+        'Администраторы БАРС не настроены в COMMUNITY_ADMIN_BARS_RECORD_BOOKS',
+      );
+    }
+
+    // BARS cookies are bearer credentials. Never receive them over remote
+    // plain HTTP. USB adb reverse arrives at the backend via loopback.
+    const peer = req.socket?.remoteAddress ?? '';
+    const isLoopback = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer);
+    if (!req.secure && !isLoopback) {
+      throw new ForbiddenException(
+        'Для входа через БАРС нужен HTTPS или локальный USB ADB Reverse',
+      );
+    }
+
+    const verified = await this.barsVerifier.verify(dto.cookieHeader);
+    const recordBook = normalizeBarsRecordBook(verified.recordBook);
+
+    if (!allowlisted.has(recordBook)) {
+      throw new UnauthorizedException('У этого аккаунта БАРС нет прав администратора');
+    }
+
+    await new Promise<void>((resolve, reject) =>
+      req.session.regenerate((error: Error | null) =>
+        error ? reject(error) : resolve()),
+    );
+    (req.session as any).communityAdminBarsRecordBook = recordBook;
+    (req.session as any).communityAdminBarsVerifiedAt = Date.now();
+    const csrfToken = randomBytes(32).toString('hex');
+    (req.session as any).communityAdminCsrf = csrfToken;
+    await new Promise<void>((resolve, reject) =>
+      req.session.save((error: Error | null) =>
+        error ? reject(error) : resolve()),
+    );
+
+    // BARS cookies are discarded immediately; no BARS token is stored.
     return { isAdmin: true, csrfToken };
   }
 
