@@ -21,124 +21,86 @@
   <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
   [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
-## Администрирование сообществ: назначение по логину
+## Администрирование сообществ — вход через БАРС
 
-Администратором можно назначить **конкретный аккаунт бэкенда по логину**,
-например `OgarkovIA`. ID из MySQL Workbench искать не требуется.
-
-**Важно:** обычный вход в CampusApp через БАРС использует WebView и
-сохраняет учебный профиль локально. Он НЕ подтверждает серверу личность
-администратора. В панели «Группы → Управление» требуется отдельный
-вход **логин + пароль аккаунта Campus-backend**.
-
-### Исправление ошибки отсутствующей таблицы users
-
-Если в логах было `ER_NO_SUCH_TABLE: Table 'campus.users' doesn't exist`,
-обнови ветку `feature/cloud`. Теперь `AuthService` автоматически создаёт
-недостающую таблицу `users` **при первой попытке регистрации или входа**
-и повторяет запрос. Если таблица уже существует, никаких изменений в
-её схему и содержимое не вносится.
-
-Таблица создаётся в базе, указанной в локальном `DB_NAME` (при
-отсутствии этого параметра используется `campus`). Сначала проверь,
-что ты подключаешься к нужной базе: если пользователи уже существуют
-в другой базе, нужно выбрать правильное значение `DB_NAME`, а не
-создавать второй набор аккаунтов.
-
-Для автоматического создания таблицы у DB-пользователя должно быть
-право `CREATE TABLE`. Если такого права нет, администратор MySQL может
-один раз применить миграцию `migrations/20261025_users.sql`.
-
-Для локальной регистрации заранее **не добавляй новый логин**
-в `COMMUNITY_ADMIN_USERNAMES`: иначе имя будет зарезервировано
-от публичной регистрации. Сначала создай обычный аккаунт с выбранным
-паролем, затем добавь его имя в список администраторов и перезапусти сервер.
+Администратор может использовать уже открытую сессию БАРС МЭИ без
+второго логина и пароля. Назначение выполняется по **номеру зачётной
+книжки**, который **сам бэкенд** прочитает из двух страниц БАРС.
+Логин ОСЭП OgarkovIA из клиентского профиля не считается доказательством
+личности: его недостаточно просто прислать на сервер.
 
 ### Первоначальная настройка
 
-1. **Если аккаунт `OgarkovIA` уже зарегистрирован в таблице `users`**
-   через `POST /auth/register`, переходи сразу к шагу 2.
+Посмотри номер зачётки в профиле CampusApp или БАРС (№ ЗК).
+Открой локальный файл Campus-backend/.env и добавь:
 
-   Если аккаунта ещё нет, зарегистрируй его **до включения админ-имени
-   в `.env`**. Запрос требует `username`, `email`, `password`:
+```dotenv
+COMMUNITY_ADMIN_BARS_RECORD_BOOKS=ТВОЙ_НОМЕР_ЗАЧЁТКИ
+SESSION_SECRET=СЛУЧАЙНЫЙ_СЕКРЕТ_НЕ_КОРОЧЕ_32_СИМВОЛОВ
+COOKIE_SECURE=false
+```
 
-   ```powershell
-   $login = 'OgarkovIA'
-   $email = Read-Host 'Email для регистрации'
-   $password = Read-Host 'Новый пароль' -AsSecureString
-   $body = @{
-     username = $login
-     email = $email
-     password = [System.Net.NetworkCredential]::new('', $password).Password
-   } | ConvertTo-Json
-   Invoke-RestMethod -Uri 'http://localhost:8000/auth/register' -Method Post -ContentType 'application/json' -Body $body
-   Remove-Variable body, password
-   ```
-
-   Email нужен **только для регистрации аккаунта**. При входе
-   администратора он больше не вводится и не проверяется.
-   Не используй пароль БАРС: создай отдельный надёжный пароль.
-
-2. В локальный `.env` бэкенда добавь:
-
-   ```dotenv
-   COMMUNITY_ADMIN_USERNAMES=OgarkovIA
-   COOKIE_SECURE=false
-   SESSION_SECRET=ВСТАВЬ_СВОЙ_СЛУЧАЙНЫЙ_СЕКРЕТ_ДЛИНОЙ_ОТ_32_СИМВОЛОВ
-   ```
-
-   Для генерации `SESSION_SECRET` в PowerShell:
-
-   ```powershell
-   $bytes = New-Object byte[] 48
-   $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-   $rng.GetBytes($bytes)
-   [Convert]::ToBase64String($bytes)
-   $rng.Dispose()
-   ```
-
-   Вставь сгенерированную строку вместо примера. **Не добавляй `.env`
-   в GitHub.** Нескольких администраторов можно указать через запятую:
-   `COMMUNITY_ADMIN_USERNAMES=OgarkovIA,SecondAdmin`.
-   Предыдущая настройка `COMMUNITY_ADMIN_USER_IDS` тоже работает,
-   но больше не обязательна.
-
-3. Перезапусти бэкенд и обнови Flutter. Открой
-   **Сервисы → Группы → значок администратора**, введи логин
-   `OgarkovIA` и пароль, с которым регистрировался аккаунт.
-
-**Как это защищено:** сервер ищет по логину **ровно один** аккаунт,
-проверяет bcrypt-хеш пароля, а затем сверяет логин с `.env`. Если
-имя дублируется в базе, вход блокируется. После конфигурации имя
-администратора нельзя заново зарегистрировать через публичный API.
-Проверка прав и CSRF-токена выполняется на сервере для каждого
-административного запроса. Одного написанного логина недостаточно.
-
-### Что можно делать
-
-- Проверять, подтверждать, отклонять и удалять пользовательские заявки.
-- Менять названия, описания, категории, ссылки Telegram/VK и картинки.
-- Удалять опубликованные сообщества; встроенные скрывать и восстанавливать.
-
-Маршруты модерации: `GET /services/admin/groups`,
-`PATCH /services/admin/submissions/:id`,
-`PATCH /services/admin/groups/:id`,
-`PATCH /services/admin/groups/:id/icon`,
-`DELETE /services/admin/groups/:id`.
-Все требуют серверную сессию, а изменения — `X-Community-CSRF`.
-
-### Дополнительно
-
-Таблицы `campus_communities`, `campus_community_icons`,
-`campus_featured_overrides` и `campus_featured_icons` создаются
-при первом запросе. Если MySQL не разрешает `CREATE TABLE`,
-примени `migrations/20261025_campus_communities.sql`.
-
-Для продакшена необходимы HTTPS и постоянное хранилище серверных
-сессий; стандартный MemoryStore предназначен только для разработки.
+Номер сохрани точно (ведущие нули не удаляй). Нескольких
+администраторов можно указать через запятую.
+Чтобы создать секрет в PowerShell:
 
 ```powershell
-npm test -- --runInBand auth.service.spec.ts community-admin.guard.spec.ts community-admin.service.spec.ts
+$bytes = New-Object byte[] 48
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($bytes)
+[Convert]::ToBase64String($bytes)
+$rng.Dispose()
+```
+
+**Регистрация в таблице users для входа через БАРС не требуется.**
+Старые настройки COMMUNITY_ADMIN_USERNAMES и USER_IDS продолжат работать
+с прежним API логина по паролю, но новая админ-панель использует БАРС.
+
+### Запуск на локальном телефоне по USB
+
+Не передавай cookie БАРС по незашифрованной сети. Для локальной
+разработки используется ADB Reverse:
+
+```powershell
+# В Campus-backend
+npm run start:dev
+# В другом PowerShell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" -s AM5HJV5A09H00643 reverse tcp:8000 tcp:8000
+# В CampusApp
+flutter run -d AM5HJV5A09H00643 --dart-define=CAMPUS_API_BASE_URL=http://127.0.0.1:8000
+```
+
+Зайди в CampusApp → Сервисы → Группы → значок администратора.
+Если сессия БАРС действительна, сервер проверит её и откроет модерацию
+автоматически. Иначе откроется WebView с обычным входом в БАРС.
+
+### Как это защищено
+
+- Flutter через WebViewCookieManager получает cookie БАРС, но не пароль.
+  Cookie передаются только на доверенный backend по HTTPS или
+  локальному ADB Reverse (127.0.0.1).
+- Сервер запрашивает фиксированные адреса
+  https://bars.mpei.ru/bars_web/ST/Student/ListStudent и
+  /bars_web/ST/Student/Main?studentID=...,
+  требует единственный профиль студента и одинаковый номер зачётки
+  на обеих страницах. Номер сравнивается с серверным списком
+  COMMUNITY_ADMIN_BARS_RECORD_BOOKS. Входящие ФИО/email/номер зачётки
+  от телефона никогда не используются как доказательство авторизации.
+- Cookie БАРС не сохраняются; вместо них выдаётся Campus-сессия
+  с CSRF. Права, подтверждённые БАРС, живут не более **30 минут**,
+  затем проходят повторную серверную проверку.
+- При изменениях верстки БАРС SSO безопасно откажет во входе
+  до исправления парсера. Это интеграция по cookie, **не официальный
+  OAuth/OIDC**, и для продакшена нужен HTTPS, безопасный сервер
+  сессий и корректная настройка TLS-прокси.
+
+Модерация позволяет подтверждать, отклонять, редактировать и удалять
+сообщества. Все изменяющие запросы требуют X-Community-CSRF.
+
+Тесты:
+
+```powershell
+npm test -- --runInBand community-admin.bars-login.spec.ts bars-session-verifier.service.spec.ts community-admin.guard.spec.ts
 ```
 
 ## Студенческие сообщества CampusApp
