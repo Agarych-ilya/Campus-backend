@@ -29,21 +29,26 @@ describe('ServicesService', () => {
     service = new ServicesService({ query } as unknown as DbService);
   });
 
-  it('keeps the three curated public MPEI groups', () => {
+  it('keeps the curated public MPEI groups', () => {
     const groups = service.getTelegramGroups();
     expect(groups.map((group) => group.username)).toEqual([
       'mpeichat',
       'mpei_1kurs',
       'MPEImai',
+      'mpeiuniversity',
+      'mpei_profcom',
+      'oss_mpei',
     ]);
   });
 
   it('returns approved groups with social links and no invented counts', async () => {
     const groups = await service.getGroups();
-    expect(groups).toHaveLength(3);
+    expect(groups).toHaveLength(6);
     expect(groups[0].telegramUrl).toBe('https://t.me/mpeichat');
     expect(groups[0].memberCount).toBeNull();
     expect(groups[2].iconKind).toBe('news');
+    expect(groups[2].memberCountSource).toBe('telegram_snapshot');
+    expect(groups[3].vkUrl).toBe('https://vk.com/mpei_ru');
   });
 
   it('returns moderator-approved SQL rows alongside the curated catalog', async () => {
@@ -62,9 +67,9 @@ describe('ServicesService', () => {
     });
 
     const groups = await service.getGroups();
-    expect(groups).toHaveLength(4);
-    expect(groups[3].vkUrl).toBe('https://vk.com/example_club');
-    expect(groups[3].memberCountSource).toBe('self_reported');
+    expect(groups).toHaveLength(7);
+    expect(groups[6].vkUrl).toBe('https://vk.com/example_club');
+    expect(groups[6].memberCountSource).toBe('self_reported');
   });
 
   it('saves a valid suggestion as pending, never approved', async () => {
