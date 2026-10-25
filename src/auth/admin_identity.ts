@@ -21,7 +21,7 @@ export function allowedCommunityAdminUsernames(): Set<string> {
  * claimed record book as proof of identity.
  */
 export function normalizeBarsRecordBook(recordBook: string): string {
-  return recordBook.normalize('NFKC').trim().replace(/\\s+/g, '').toUpperCase();
+  return recordBook.normalize('NFKC').trim().replace(/\s+/g, '').toUpperCase();
 }
 
 export function allowedCommunityAdminBarsRecordBooks(): Set<string> {
