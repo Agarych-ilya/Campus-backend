@@ -1,4 +1,10 @@
-import { ConflictException, Injectable, UnauthorizedException, NotFoundException, } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { RegisterDto, LoginDto } from './dto/create-auth.dto';
 import * as bcrypt from 'bcrypt';
 import {
@@ -9,7 +15,60 @@ import { DbService } from '../db.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+  private usersTableReady: Promise<void> | null = null;
+
   constructor(private db: DbService) {}
+
+  /**
+   * Create the users table only when MySQL confirms it does not exist.
+   * Existing installations keep their current schema and data unchanged.
+   * Concurrent registration/login calls share the same creation attempt.
+   */
+  private async ensureUsersTable(): Promise<void> {
+    if (this.usersTableReady === null) {
+      this.usersTableReady = (async () => {
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS users (' +
+            'id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, ' +
+            'username VARCHAR(100) NOT NULL, ' +
+            'email VARCHAR(255) NOT NULL, ' +
+            'password_hash VARCHAR(255) NOT NULL, ' +
+            'created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, ' +
+            'UNIQUE KEY uq_users_username (username), ' +
+            'UNIQUE KEY uq_users_email (email)' +
+            ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ' +
+            'COLLATE=utf8mb4_unicode_ci',
+        );
+        this.logger.log('MySQL users table is ready');
+      })().catch((error: unknown) => {
+        this.usersTableReady = null;
+        throw error;
+      });
+    }
+
+    await this.usersTableReady;
+  }
+
+  /**
+   * Run normal queries directly; only missing-table errors trigger schema
+   * initialization. A wrong password or another SQL error is not swallowed.
+   */
+  private async queryUsers<T>(
+    sql: string,
+    params: unknown[] = [],
+  ): Promise<T> {
+    try {
+      return await this.db.query(sql, params) as T;
+    } catch (error) {
+      if ((error as { code?: string })?.code !== 'ER_NO_SUCH_TABLE') {
+        throw error;
+      }
+
+      await this.ensureUsersTable();
+      return await this.db.query(sql, params) as T;
+    }
+  }
 
   async register(request: RegisterDto) {
     const username = request.username.trim();
@@ -25,7 +84,7 @@ export class AuthService {
       );
     }
 
-    const existingUsers = await this.db.query(
+    const existingUsers = await this.queryUsers(
       'SELECT id FROM users WHERE email = ? OR LOWER(username) = ? LIMIT 2',
       [cleanEmail, normalizeAccountUsername(username)],
     ) as Array<{ id: number }>;
@@ -36,7 +95,7 @@ export class AuthService {
     }
 
     const hashedPassword = await bcrypt.hash(request.password, 12);
-    const result = await this.db.query(
+    const result = await this.queryUsers(
       'INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)',
       [username, cleanEmail, hashedPassword],
     ) as { insertId: number };
@@ -52,7 +111,7 @@ export class AuthService {
     const { email, password } = request;
     const cleanEmail = email.trim().toLowerCase();
 
-    const users = await this.db.query(
+    const users = await this.queryUsers(
       'SELECT * FROM users WHERE email = ? LIMIT 1',
       [cleanEmail]
     ) as any[];
@@ -85,7 +144,7 @@ export class AuthService {
       throw new UnauthorizedException('Неверный логин или пароль');
     }
 
-    const users = await this.db.query(
+    const users = await this.queryUsers(
       'SELECT id, username, email, password_hash FROM users ' +
         'WHERE LOWER(username) = ? LIMIT 2',
       [normalized],
