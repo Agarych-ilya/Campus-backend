@@ -20,7 +20,7 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import type { Request, Response } from 'express';
+import type { Response } from 'express';
 import { AuthService } from '../../auth/auth.service';
 import { LoginDto } from '../../auth/dto/create-auth.dto';
 import { CommunityAdminService } from './community-admin.service';
@@ -50,7 +50,7 @@ export class CommunityAdminController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @UsePipes(validate)
-  async login(@Body() dto: LoginDto, @Req() req: Request) {
+  async login(@Body() dto: LoginDto, @Req() req: any) {
     const allowed = allowedCommunityAdminIds();
     if (allowed.size === 0) {
       throw new ServiceUnavailableException(
@@ -94,7 +94,7 @@ export class CommunityAdminController {
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   @UseGuards(CommunityAdminGuard)
-  async logout(@Req() req: Request) {
+  async logout(@Req() req: any) {
     await new Promise<void>((resolve, reject) =>
       req.session.destroy((error) => error ? reject(error) : resolve()),
     );
