@@ -46,6 +46,22 @@ export class ServicesController {
       .send(icon.data);
   }
 
+  @Get('groups/featured-icons/:id')
+  async getFeaturedIcon(
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const icon = await this.servicesService.getFeaturedIcon(id);
+    return res
+      .status(200)
+      .set({
+        'Content-Type': icon.mime,
+        'Cache-Control': 'public, max-age=300',
+        'X-Content-Type-Options': 'nosniff',
+      })
+      .send(icon.data);
+  }
+
   /** User-chosen PNG/JPEG/WebP image is kept private until moderation. */
   @Post('groups/submissions')
   @HttpCode(HttpStatus.ACCEPTED)
