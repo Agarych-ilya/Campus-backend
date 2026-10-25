@@ -14,7 +14,7 @@ import { UpdateCommunityDto } from './community-admin.dto';
 
 type CommunityStatus = 'pending' | 'approved' | 'rejected';
 
-interface CommunityAdminItem extends Community {
+export interface CommunityAdminItem extends Community {
   status: CommunityStatus | 'hidden';
   builtIn: boolean;
 }
