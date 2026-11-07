@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 
-export type MemberCountSource = 'telegram' | 'vk' | null;
+export type MemberCountSource = 'telegram' | 'vk' | 'manual' | null;
 
 export interface CommunityMemberStats {
   memberCount: number | null;

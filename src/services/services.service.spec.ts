@@ -77,9 +77,25 @@ describe('ServicesService', () => {
     expect(groups[0].memberCountCheckedAt).toContain('2026-10-25');
   });
 
+  it('labels a manual participant count as administrator-entered', async () => {
+    query.mockImplementation((sql: string) => {
+      if (sql.startsWith('CREATE TABLE')) return [];
+      if (sql.includes('FROM campus_community_member_overrides')) {
+        return [{ community_id: 'mpeichat', member_count: 942 }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      throw new Error('Unexpected query');
+    });
+    const groups = await service.getGroups();
+    expect(groups[0].memberCount).toBe(942);
+    expect(groups[0].memberCountSource).toBe('manual');
+    expect(groups[0].memberCountCheckedAt).toBeNull();
+  });
+
   it('returns approved groups and an image URL, but not the blob', async () => {
     query.mockImplementation((sql: string) => {
       if (sql.startsWith('CREATE TABLE')) return [];
+      if (sql.includes('FROM campus_community_member_overrides')) return [];
       return [{
         id: 10,
         title: 'Студенческий клуб',

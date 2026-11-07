@@ -103,6 +103,27 @@ describe('CommunityAdminService', () => {
     expect(outcome).toEqual({ id: 'mpeichat', status: 'approved' });
   });
 
+  it('persists an explicitly admin-entered participant count', async () => {
+    await service.update('community-42', { memberCount: 482 });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO campus_community_member_overrides'),
+      ['community-42', 482],
+    );
+  });
+
+  it('lets the admin clear a participant-count override', async () => {
+    await service.update('mpeichat', { memberCount: null });
+    expect(query).toHaveBeenCalledWith(
+      'DELETE FROM campus_community_member_overrides WHERE community_id = ?',
+      ['mpeichat'],
+    );
+  });
+
+  it('rejects invalid participant counts', async () => {
+    await expect(service.update('community-42', { memberCount: -3 }))
+      .rejects.toThrow('Некорректное количество участников');
+  });
+
   it('lets the admin replace the photo of a built-in group', async () => {
     const icon = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
     await service.updateIcon('mpeichat', {

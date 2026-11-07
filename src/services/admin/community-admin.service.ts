@@ -140,6 +140,11 @@ export class CommunityAdminService {
   }
 
   async update(id: string, dto: UpdateCommunityDto) {
+    if (dto.memberCount !== undefined && dto.memberCount !== null &&
+        (!Number.isSafeInteger(dto.memberCount) ||
+         dto.memberCount < 0 || dto.memberCount > 100000000)) {
+      throw new BadRequestException('Некорректное количество участников');
+    }
     await this.services.ensureTable();
     const seed = featuredCommunities.find((item) => item.id === id);
 
@@ -183,6 +188,7 @@ export class CommunityAdminService {
         ],
       );
 
+      await this.saveManualCount(id, dto.memberCount);
       return { id, status: next.hidden ? 'hidden' : 'approved' };
     }
 
@@ -226,6 +232,7 @@ export class CommunityAdminService {
         next.telegramUrl, next.vkUrl, numericId,
       ],
     );
+    await this.saveManualCount(id, dto.memberCount);
     return { id, status: current.status };
   }
 
@@ -251,6 +258,10 @@ export class CommunityAdminService {
     await this.db.query(
       'DELETE FROM campus_community_icons WHERE community_id = ?',
       [numericId],
+    );
+    await this.db.query(
+      'DELETE FROM campus_community_member_overrides WHERE community_id = ?',
+      [id],
     );
     await this.db.query(
       'DELETE FROM campus_communities WHERE id = ?',
@@ -311,6 +322,31 @@ export class CommunityAdminService {
     }
 
     return { mime: rows[0].icon_mime, data: rows[0].icon_data };
+  }
+
+  /** A manual member count is never mistaken for a social API measurement. */
+  private async saveManualCount(
+    id: string,
+    count: number | null | undefined,
+  ): Promise<void> {
+    if (count === undefined) return;
+    if (count === null) {
+      await this.db.query(
+        'DELETE FROM campus_community_member_overrides WHERE community_id = ?',
+        [id],
+      );
+      return;
+    }
+    // The DTO also validates the range, but enforce it in the service layer.
+    if (!Number.isSafeInteger(count) || count < 0 || count > 100000000) {
+      throw new BadRequestException('Некорректное количество участников');
+    }
+    await this.db.query(
+      'INSERT INTO campus_community_member_overrides ' +
+        '(community_id, member_count) VALUES (?, ?) ' +
+        'ON DUPLICATE KEY UPDATE member_count = VALUES(member_count)',
+      [id, count],
+    );
   }
 
   private assertId(id: number) {

@@ -288,6 +288,25 @@ export class ServicesService {
       }
     }));
 
+    // Manually entered counts are always explicitly labelled: never
+    // represent them as values verified by Telegram or VK.
+    const manual = (await this.db.query(
+      'SELECT community_id, member_count FROM campus_community_member_overrides',
+    )) as Array<{ community_id: string; member_count: number }>;
+    const manualById = new Map(manual.map(row => [
+      row.community_id, Number(row.member_count),
+    ]));
+    for (const community of approved) {
+      const count = manualById.get(community.id);
+      if (count !== undefined && Number.isSafeInteger(count) &&
+          count >= 0 && count <= 100000000) {
+        community.memberCount = count;
+        community.memberCountSource = 'manual';
+        community.memberCountCheckedAt = null;
+        community.memberCountApproximate = false;
+      }
+    }
+
     return approved;
   }
 
@@ -575,6 +594,14 @@ export class ServicesService {
             'id VARCHAR(64) NOT NULL PRIMARY KEY, ' +
             'icon_mime VARCHAR(16) NOT NULL, ' +
             'icon_data MEDIUMBLOB NOT NULL' +
+            ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_community_member_overrides (' +
+            'community_id VARCHAR(80) NOT NULL PRIMARY KEY, ' +
+            'member_count INT UNSIGNED NOT NULL, ' +
+            'updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ' +
+            'ON UPDATE CURRENT_TIMESTAMP' +
             ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
         );
       })().catch((error: unknown) => {

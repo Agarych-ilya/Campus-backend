@@ -1,6 +1,9 @@
 import {
   IsBoolean,
   IsIn,
+  IsInt,
+  Max,
+  Min,
   IsOptional,
   IsString,
   IsUrl,
@@ -45,6 +48,13 @@ export class UpdateCommunityDto {
   @IsUrl({ require_protocol: true, protocols: ['https'] })
   @MaxLength(512)
   vkUrl?: string | null;
+
+  // Null removes an administrator-provided number; undefined leaves it alone.
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100000000)
+  memberCount?: number | null;
 
   @IsOptional()
   @IsBoolean()
