@@ -10,11 +10,13 @@ import { ServicesController } from './services.controller';
 import { ListingsController } from './listings/listings.controller';
 import { ListingsService } from './listings/listings.service';
 import { ListingsOwnerGuard } from './listings/listings-owner.guard';
+import { StudyPublicController } from './study/study-public.controller';
+import { StudyPublicService } from './study/study-public.service';
 import { ServicesService } from './services.service';
 
 @Module({
   imports: [AuthModule],
-  controllers: [ServicesController, CommunityAdminController, ListingsController],
+  controllers: [ServicesController, CommunityAdminController, ListingsController, StudyPublicController],
   providers: [
     ServicesService,
     DbService,
@@ -24,6 +26,7 @@ import { ServicesService } from './services.service';
     BarsSessionVerifier,
     ListingsService,
     ListingsOwnerGuard,
+    StudyPublicService,
   ],
 })
 export class ServicesModule {}
