@@ -12,7 +12,7 @@ export class DbService implements OnModuleDestroy {
       port: Number(this.configService.get<string>('DB_PORT') ?? 3306),
       user: this.configService.get<string>('DB_USER', 'root'),
       password: this.configService.get<string>('DB_PASSWORD', ''),
-      database: this.configService.get<string>('DB_NAME', 'campus_db'),
+      database: this.configService.get<string>('DB_NAME', 'campus'),
 
       waitForConnections: true,
       connectionLimit: 10,

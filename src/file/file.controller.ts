@@ -1,43 +1,69 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, ValidationPipe, UsePipes, HttpException, UploadedFile, UseInterceptors } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Param,
+  Delete,
+  UploadedFile,
+  UseInterceptors,
+  Res,
+} from '@nestjs/common';
+
 import { FileService } from './file.service';
 import { FileInterceptor } from '@nestjs/platform-express';
-import 'multer';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
+import type { Response } from 'express';
 
 @Controller('file')
 export class FileController {
-  constructor(private readonly fileService: FileService) {}
+  constructor(private readonly fileService: FileService) { }
 
-  @Post('postFile')
-  @UsePipes(new ValidationPipe())
-  @UseInterceptors(FileInterceptor('file', {
-    storage: diskStorage({
-      destination: `./cloud`,
-      filename: (req, file, callback) => {
-        const ext = extname(file.originalname)
-        const filename = `${Date.now()}${ext}`;
-        callback(null, `${filename}`)
-      },
+  @Post('upload')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: './cloud',
+
+        filename: (req, file, callback) => {
+          const extension = extname(file.originalname);
+
+          const filename =
+            `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`;
+
+          callback(null, filename);
+        },
+      }),
     }),
-  }))
-  async postFile(@UploadedFile() file: Express.Multer.File) {
-    return await this.fileService.postFile(file);
+  )
+  async uploadFile(
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.fileService.postFile(file);
   }
 
-  @Get('getFile/:id')
-  async getFile(@Param('id') id: string) {
-    if (!true){ // Требуется проверять сессии, временно отключено
-      throw new HttpException('Forbidden', 403);
-    }
-    return await this.fileService.getFile(id);
+  @Get()
+  async getFiles() {
+    return this.fileService.getFiles();
   }
 
-  @Delete('deleteFile/:id')
-  async deleteFile(@Param('id') id: string) {
-    if (!true){ // Требуется проверять сессии, временно отключено
-      throw new HttpException('Forbidden', 403);
-    }
-    return await this.fileService.deleteFile(id);
+  @Get(':id/download')
+  async downloadFile(
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const file = await this.fileService.getFile(id);
+
+    return res.download(
+      file.path,
+      file.name,
+    );
+  }
+
+  @Delete(':id')
+  async deleteFile(
+    @Param('id') id: string,
+  ) {
+    return this.fileService.deleteFile(id);
   }
 }
