@@ -77,6 +77,7 @@ export class BarsSessionVerifier {
     // Do not choose an arbitrary student from a multi-student staff/parent
     // account. BARS must show exactly one student for this session.
     if (rows.length !== 1) {
+      this.logger.warn('BARS admin verification: student-list-rows-not-one');
       throw new UnauthorizedException(
         'БАРС не подтвердил единственный профиль студента',
       );
@@ -91,6 +92,7 @@ export class BarsSessionVerifier {
     const listBook = normalizeBarsRecordBook(cells.eq(1).text());
 
     if (!listBook || listBook.length > 64 || cells.length < 4) {
+      this.logger.warn('BARS admin verification: list-record-book-not-found');
       throw new UnauthorizedException('В БАРС не найден номер зачётки');
     }
 
@@ -137,8 +139,14 @@ export class BarsSessionVerifier {
         throw new Error('Invalid student ID format');
       }
 
-      // Discard all other query parameters from the student-list HTML.
-      detailsPath = pathname + '?studentID=' + encodeURIComponent(studentId);
+      // The student-list link leads to /ST/Student/Main, but GUID-based
+      // student profiles expose the verified record book on the protected
+      // /ST_Study/Main/Main page. Fetch that known endpoint directly;
+      // BARS may redirect /ST/Student/Main, while redirects are disabled.
+      // Legacy numeric IDs retain the existing endpoint.
+      detailsPath = isGuid
+        ? '/bars_web/ST_Study/Main/Main?studentID=' + encodeURIComponent(studentId)
+        : pathname + '?studentID=' + encodeURIComponent(studentId);
     } catch {
       this.logger.warn('Rejected BARS profile link (' + rejectionReason + ')');
       throw new UnauthorizedException('Некорректный профиль БАРС');
@@ -164,6 +172,8 @@ export class BarsSessionVerifier {
       foundBooks[0] !== listBook ||
       !$details('#div-FormHeader').length
     ) {
+      // No BARS page content or personally identifying values in logs.
+      this.logger.warn('BARS admin verification: study-record-book-mismatch-or-missing');
       throw new UnauthorizedException('Профиль БАРС не прошёл проверку');
     }
 

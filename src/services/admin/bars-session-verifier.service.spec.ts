@@ -54,9 +54,9 @@ describe('BarsSessionVerifier', () => {
     ['Main?studentID=12345',
       'https://bars.mpei.ru/bars_web/ST/Student/Main?studentID=12345'],
     ['/bars_web/ST/Student/Main?studentID=bf3c6758-a323-4d8d-9b0c-62aefc6e3340',
-      'https://bars.mpei.ru/bars_web/ST/Student/Main?studentID=bf3c6758-a323-4d8d-9b0c-62aefc6e3340'],
+      'https://bars.mpei.ru/bars_web/ST_Study/Main/Main?studentID=bf3c6758-a323-4d8d-9b0c-62aefc6e3340'],
     ['/bars_web/ST/Student/Main?studentID=BF3C6758A3234D8D9B0C62AEFC6E3340',
-      'https://bars.mpei.ru/bars_web/ST/Student/Main?studentID=BF3C6758A3234D8D9B0C62AEFC6E3340'],
+      'https://bars.mpei.ru/bars_web/ST_Study/Main/Main?studentID=BF3C6758A3234D8D9B0C62AEFC6E3340'],
   ])('accepts BARS student-link format %s after checking both pages',
     async (href, expectedUrl) => {
       get.mockReset();
@@ -71,6 +71,26 @@ describe('BarsSessionVerifier', () => {
       expect(get.mock.calls[1][0]).toBe(expectedUrl);
     },
   );
+
+  it('verifies a GUID profile using the BARS study page header format', async () => {
+    get.mockReset();
+    const id = 'bf3c6758-a323-4d8d-9b0c-62aefc6e3340';
+    get.mockResolvedValueOnce({
+      status: 200,
+      data: studentList.replace('studentID=12345', 'studentID=' + id),
+    });
+    get.mockResolvedValueOnce({
+      status: 200,
+      data: '<div id="div-FormHeader"><div><span class="fw-bold">' +
+        'Тестовый Студент (№ЗК - 123456)</span>' +
+        '<span class="fw-bold">А-03-23</span></div></div>',
+    });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .resolves.toEqual({ recordBook: '123456' });
+    expect(get.mock.calls[1][0]).toBe(
+      'https://bars.mpei.ru/bars_web/ST_Study/Main/Main?studentID=' + id,
+    );
+  });
 
   it('rejects an unsupported student ID instead of forwarding it', async () => {
     get.mockReset();
