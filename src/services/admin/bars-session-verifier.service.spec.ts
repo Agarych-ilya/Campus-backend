@@ -92,6 +92,43 @@ describe('BarsSessionVerifier', () => {
     );
   });
 
+  it('accepts multiple profile links when they identify the same student', async () => {
+    get.mockReset();
+    const html = studentList.replace(
+      'Студент</a>',
+      'Студент</a><a href="/ST/Student/Main?StudentID=12345">Сведения</a>',
+    );
+    get.mockResolvedValueOnce({ status: 200, data: html });
+    get.mockResolvedValueOnce({ status: 200, data: studentPage });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .resolves.toEqual({ recordBook: '123456' });
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects multiple profile links referring to different students', async () => {
+    get.mockReset();
+    const html = studentList.replace(
+      'Студент</a>',
+      'Студент</a><a href="/ST/Student/Main?studentID=99999">Другой</a>',
+    );
+    get.mockResolvedValueOnce({ status: 200, data: html });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an untrusted second profile link even if the first is valid', async () => {
+    get.mockReset();
+    const html = studentList.replace(
+      'Студент</a>',
+      'Студент</a><a href="//untrusted.example/ST/Student/Main?studentID=12345">Другой</a>',
+    );
+    get.mockResolvedValueOnce({ status: 200, data: html });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects an unsupported student ID instead of forwarding it', async () => {
     get.mockReset();
     get.mockResolvedValueOnce({

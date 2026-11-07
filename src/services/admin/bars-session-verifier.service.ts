@@ -100,7 +100,7 @@ export class BarsSessionVerifier {
     const links = row.find('a[href]').filter((_, anchor) =>
       /(?:\/Student\/Main|^Main\?)/.test($(anchor).attr('href') ?? ''),
     );
-    const href = links.length === 1 ? links.first().attr('href') : undefined;
+    const hrefs = links.toArray().map((anchor) => $(anchor).attr('href') ?? '');
     const cells = row.find('td');
     const listBook = normalizeBarsRecordBook(cells.eq(1).text());
 
@@ -114,49 +114,65 @@ export class BarsSessionVerifier {
     // or record-book numbers.
     let rejectionReason = 'invalid-url';
     try {
-      if (!href) {
-        rejectionReason = 'missing-or-ambiguous-link';
-        throw new Error('Invalid student link');
-      }
-      const url = new URL(
-        href, this.origin + '/bars_web/ST/Student/ListStudent',
-      );
-      const pathname = url.pathname.replace(/\/$/, '');
-      if (url.origin !== this.origin || url.username || url.password || url.hash) {
-        rejectionReason = 'unexpected-origin-or-fragment';
-        throw new Error('Unexpected BARS origin');
-      }
-      if (![
-        '/bars_web/ST/Student/Main',
-        '/ST/Student/Main',
-      ].includes(pathname)) {
-        rejectionReason = 'unexpected-path';
-        throw new Error('Unexpected BARS profile path');
+      if (hrefs.length === 0) {
+        rejectionReason = 'missing-link';
+        throw new Error('Missing student link');
       }
 
-      const studentIds = [...url.searchParams.entries()]
-        .filter(([key]) => key.toLowerCase() === 'studentid')
-        .map(([, value]) => value);
-      if (studentIds.length !== 1) {
-        rejectionReason = 'missing-or-ambiguous-id';
-        throw new Error('Missing or ambiguous student ID');
-      }
-      const studentId = studentIds[0];
-      // BARS identifiers may be numeric or GUIDs; never grant admin access
-      // until the matching record book is read on both protected BARS pages.
-      const isIntegerId = /^\d{1,16}$/.test(studentId);
-      const isGuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(studentId)
-        || /^[0-9a-f]{32}$/i.test(studentId);
-      if (!isIntegerId && !isGuid) {
-        rejectionReason = 'unsupported-id-format';
-        throw new Error('Invalid student ID format');
+      // Multiple buttons can link to the same BARS student. Validate *all*
+      // candidate links and reject the row if any point to a different
+      // student. The first link is never blindly trusted.
+      const profiles = hrefs.map((href) => {
+        if (!href) {
+          rejectionReason = 'empty-link';
+          throw new Error('Empty BARS profile link');
+        }
+        const url = new URL(
+          href, this.origin + '/bars_web/ST/Student/ListStudent',
+        );
+        const pathname = url.pathname.replace(/\/$/, '');
+        if (url.origin !== this.origin || url.username || url.password || url.hash) {
+          rejectionReason = 'unexpected-origin-or-fragment';
+          throw new Error('Unexpected BARS origin');
+        }
+        if (![
+          '/bars_web/ST/Student/Main',
+          '/ST/Student/Main',
+        ].includes(pathname)) {
+          rejectionReason = 'unexpected-path';
+          throw new Error('Unexpected BARS profile path');
+        }
+
+        const studentIds = [...url.searchParams.entries()]
+          .filter(([key]) => key.toLowerCase() === 'studentid')
+          .map(([, value]) => value);
+        if (studentIds.length !== 1) {
+          rejectionReason = 'missing-or-ambiguous-id';
+          throw new Error('Missing or ambiguous student ID');
+        }
+        const studentId = studentIds[0];
+        const isIntegerId = /^\d{1,16}$/.test(studentId);
+        const isGuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(studentId)
+          || /^[0-9a-f]{32}$/i.test(studentId);
+        if (!isIntegerId && !isGuid) {
+          rejectionReason = 'unsupported-id-format';
+          throw new Error('Invalid student ID format');
+        }
+        return { studentId, isGuid, pathname };
+      });
+
+      // GUID comparison is case-insensitive; numerical IDs are exact strings.
+      const uniqueStudents = new Set(profiles.map((profile) =>
+        profile.isGuid ? profile.studentId.toLowerCase() : profile.studentId,
+      ));
+      if (uniqueStudents.size !== 1) {
+        rejectionReason = 'conflicting-student-links';
+        throw new Error('Multiple student profiles in one row');
       }
 
-      // The student-list link leads to /ST/Student/Main, but GUID-based
-      // student profiles expose the verified record book on the protected
-      // /ST_Study/Main/Main page. Fetch that known endpoint directly;
-      // BARS may redirect /ST/Student/Main, while redirects are disabled.
-      // Legacy numeric IDs retain the existing endpoint.
+      const { studentId, isGuid, pathname } = profiles[0];
+      // Only BARS-provided, validated identifiers go to known BARS endpoints.
+      // GUID study pages expose the record book in #div-FormHeader.
       detailsPath = isGuid
         ? '/bars_web/ST_Study/Main/Main?studentID=' + encodeURIComponent(studentId)
         : pathname + '?studentID=' + encodeURIComponent(studentId);
