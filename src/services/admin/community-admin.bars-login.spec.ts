@@ -52,6 +52,37 @@ describe('CommunityAdminController BARS authentication', () => {
     expect(req.session.communityAdminUserId).toBeUndefined();
   });
 
+  it('preserves the existing CampusApp login when BARS admin is verified', async () => {
+    const req = request();
+    const user = { id: 19, username: 'student', email: 'student@example.org' };
+    req.session.user = user;
+    // express-session discards the previous session contents when rotating ID.
+    req.session.regenerate = (callback: (error?: Error) => void) => {
+      delete req.session.user;
+      callback();
+    };
+    await controller.loginFromBars({
+      cookieHeader: 'ASP.NET_SessionId=abc123',
+    }, req);
+    expect(req.session.user).toEqual(user);
+    expect(req.session.communityAdminBarsRecordBook).toBe('123456');
+  });
+
+  it('exits admin mode without logging out the CampusApp user', async () => {
+    const req = request();
+    const user = { id: 19, username: 'student', email: 'student@example.org' };
+    req.session.user = user;
+    await controller.loginFromBars({
+      cookieHeader: 'ASP.NET_SessionId=abc123',
+    }, req);
+
+    await controller.logout(req);
+    expect(req.session.user).toEqual(user);
+    expect(req.session.communityAdminBarsRecordBook).toBeUndefined();
+    expect(req.session.communityAdminBarsVerifiedAt).toBeUndefined();
+    expect(req.session.communityAdminCsrf).toBeUndefined();
+  });
+
   it('denies valid BARS students not in the server allowlist', async () => {
     verifier.verify.mockResolvedValue({ recordBook: '222222' });
 

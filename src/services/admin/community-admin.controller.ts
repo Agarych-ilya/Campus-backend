@@ -143,10 +143,22 @@ export class CommunityAdminController {
       throw new UnauthorizedException('У этого аккаунта БАРС нет прав администратора');
     }
 
+    // Preserve an independently authenticated CampusApp user when rotating
+    // the session ID; otherwise granting admin silently logs them out.
+    const authenticatedUser = req.session.user;
     await new Promise<void>((resolve, reject) =>
       req.session.regenerate((error: Error | null) =>
         error ? reject(error) : resolve()),
     );
+    if (
+      authenticatedUser &&
+      Number.isSafeInteger(authenticatedUser.id) &&
+      authenticatedUser.id > 0 &&
+      typeof authenticatedUser.username === 'string' &&
+      typeof authenticatedUser.email === 'string'
+    ) {
+      req.session.user = authenticatedUser;
+    }
     (req.session as any).communityAdminBarsRecordBook = recordBook;
     (req.session as any).communityAdminBarsVerifiedAt = Date.now();
     const csrfToken = randomBytes(32).toString('hex');
@@ -170,8 +182,15 @@ export class CommunityAdminController {
   @HttpCode(HttpStatus.OK)
   @UseGuards(CommunityAdminGuard)
   async logout(@Req() req: any) {
+    // Leaving admin mode must not log the user out of CampusApp itself.
+    delete req.session.communityAdminBarsRecordBook;
+    delete req.session.communityAdminBarsVerifiedAt;
+    delete req.session.communityAdminUserId;
+    delete req.session.communityAdminUsername;
+    delete req.session.communityAdminCsrf;
     await new Promise<void>((resolve, reject) =>
-      req.session.destroy((error) => error ? reject(error) : resolve()),
+      req.session.save((error: Error | null) =>
+        error ? reject(error) : resolve()),
     );
     return { success: true };
   }

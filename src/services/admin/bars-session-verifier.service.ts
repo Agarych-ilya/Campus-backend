@@ -62,9 +62,14 @@ export class BarsSessionVerifier {
       '/bars_web/ST/Student/ListStudent', cookies,
     );
     const $ = cheerio.load(listing);
+    // BARS can render links either beneath /bars_web or at the site root.
+    // Identify candidate student rows without relying on query-param order.
+    // Their links are validated against a fixed allowlist of BARS routes below.
     const rows = $('#tbl__PartialListStudent tbody tr')
       .filter((_, row) =>
-        $(row).find('a[href*="/ST/Student/Main?studentID="]').length > 0,
+        $(row).find('a[href]').toArray().some((anchor) =>
+          /(?:\/Student\/Main|^Main\?)/.test($(anchor).attr('href') ?? ''),
+        ),
       );
 
     // Do not choose an arbitrary student from a multi-student staff/parent
@@ -76,36 +81,51 @@ export class BarsSessionVerifier {
     }
 
     const row = rows.first();
-    const link = row.find('a[href*="/ST/Student/Main?studentID="]').first();
-    const href = link.attr('href');
+    const links = row.find('a[href]').filter((_, anchor) =>
+      /(?:\/Student\/Main|^Main\?)/.test($(anchor).attr('href') ?? ''),
+    );
+    const href = links.length === 1 ? links.first().attr('href') : undefined;
     const cells = row.find('td');
     const listBook = normalizeBarsRecordBook(cells.eq(1).text());
 
-    if (!href || cells.length < 4 || !listBook || listBook.length > 64) {
+    if (!listBook || listBook.length > 64 || cells.length < 4) {
       throw new UnauthorizedException('В БАРС не найден номер зачётки');
     }
 
-    let studentId: string;
+    let detailsPath: string;
     try {
-      const url = new URL(href, this.origin);
+      if (!href) throw new Error('Missing or ambiguous student link');
+      // A relative "Main?..." should resolve beside ListStudent, not at /.
+      const url = new URL(
+        href, this.origin + '/bars_web/ST/Student/ListStudent',
+      );
+      const pathname = url.pathname.replace(/\/$/, '');
       if (
         url.origin !== this.origin ||
-        url.pathname !== '/bars_web/ST/Student/Main'
+        ![
+          '/bars_web/ST/Student/Main',
+          '/ST/Student/Main',
+        ].includes(pathname) ||
+        url.username || url.password || url.hash
       ) {
-        throw new Error('Unexpected profile link');
+        throw new Error('Unexpected BARS profile link');
       }
-      studentId = url.searchParams.get('studentID') ?? '';
-      if (!/^\d{1,16}$/.test(studentId)) {
-        throw new Error('Invalid student ID');
+
+      // The query key's casing can differ. Duplicate IDs are never trusted.
+      const studentIds = [...url.searchParams.entries()]
+        .filter(([key]) => key.toLowerCase() === 'studentid')
+        .map(([, value]) => value);
+      if (studentIds.length !== 1 || !/^\d{1,16}$/.test(studentIds[0])) {
+        throw new Error('Invalid or ambiguous student ID');
       }
+
+      // Do not forward arbitrary parameters from the HTML to the BARS server.
+      detailsPath = pathname + '?studentID=' + studentIds[0];
     } catch {
       throw new UnauthorizedException('Некорректный профиль БАРС');
     }
 
-    const details = await this.fetchBars(
-      '/bars_web/ST/Student/Main?studentID=' + studentId,
-      cookies,
-    );
+    const details = await this.fetchBars(detailsPath, cookies);
     const $details = cheerio.load(details);
     const spans = $details('#div-FormHeader span.fw-bold');
 

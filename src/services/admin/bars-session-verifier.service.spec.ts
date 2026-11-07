@@ -45,6 +45,41 @@ describe('BarsSessionVerifier', () => {
     );
   });
 
+
+  it.each([
+    ['/ST/Student/Main?studentID=12345',
+      'https://bars.mpei.ru/ST/Student/Main?studentID=12345'],
+    ['/bars_web/ST/Student/Main?foo=bar&StudentID=12345',
+      'https://bars.mpei.ru/bars_web/ST/Student/Main?studentID=12345'],
+    ['Main?studentID=12345',
+      'https://bars.mpei.ru/bars_web/ST/Student/Main?studentID=12345'],
+  ])('accepts BARS student-link format %s after checking both pages',
+    async (href, expectedUrl) => {
+      get.mockReset();
+      const html = studentList.replace(
+        '/bars_web/ST/Student/Main?studentID=12345', href,
+      );
+      get.mockResolvedValueOnce({ status: 200, data: html });
+      get.mockResolvedValueOnce({ status: 200, data: studentPage });
+
+      await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+        .resolves.toEqual({ recordBook: '123456' });
+      expect(get.mock.calls[1][0]).toBe(expectedUrl);
+    },
+  );
+
+  it('refuses duplicated studentID even for a BARS URL', async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({
+      status: 200,
+      data: studentList.replace('studentID=12345',
+        'studentID=12345&studentID=9999'),
+    });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a different record book on the second page', async () => {
     get.mockReset();
     get.mockResolvedValueOnce({ status: 200, data: studentList });
