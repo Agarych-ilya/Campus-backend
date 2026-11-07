@@ -1,48 +1,103 @@
 <p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Agarych-ilya/CampusApp/main/assets/images/logo/logo_main_dark.png">
+    <img src="https://raw.githubusercontent.com/Agarych-ilya/CampusApp/main/assets/images/logo/logo_main.png" width="104" alt="CampusApp">
+  </picture>
 </p>
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
-
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
+<h1 align="center">Campus Backend</h1>
+<p align="center">
+  <strong>Серверная основа студенческого CampusApp</strong><br>
+  API для расписания, БАРС, сообществ, объявлений, учебных наборов и облачных файлов.
 </p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
-## Администрирование сообществ — вход через БАРС
+<p align="center">
+  <a href="https://nestjs.com/"><img alt="NestJS 11" src="https://img.shields.io/badge/NestJS-11-E0234E?style=for-the-badge&amp;logo=nestjs&amp;logoColor=white"></a>
+  <a href="https://www.typescriptlang.org/"><img alt="TypeScript 5" src="https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&amp;logo=typescript&amp;logoColor=white"></a>
+  <a href="https://www.mysql.com/"><img alt="MySQL" src="https://img.shields.io/badge/MySQL-database-4479A1?style=for-the-badge&amp;logo=mysql&amp;logoColor=white"></a>
+  <a href="#основные-маршруты"><img alt="REST API" src="https://img.shields.io/badge/REST-API-4B5563?style=for-the-badge"></a>
+</p>
 
-Администратор может использовать уже открытую сессию БАРС МЭИ без
-второго логина и пароля. Назначение выполняется по **номеру зачётной
-книжки**, который **сам бэкенд** прочитает из двух страниц БАРС.
-Логин ОСЭП OgarkovIA из клиентского профиля не считается доказательством
-личности: его недостаточно просто прислать на сервер.
+<p align="center">
+  <a href="#быстрый-старт">Быстрый старт</a> ·
+  <a href="#основные-маршруты">Маршруты</a> ·
+  <a href="#авторизация-и-безопасность">Авторизация</a> ·
+  <a href="#тесты">Тесты</a> ·
+  <a href="https://github.com/Agarych-ilya/CampusApp">Flutter-клиент ↗</a>
+</p>
 
-### Первоначальная настройка
+---
 
-Посмотри номер зачётки в профиле CampusApp или БАРС (№ ЗК).
-Открой локальный файл Campus-backend/.env и добавь:
+> [!NOTE]
+> Актуальная серверная разработка ведётся в ветке **[feature/cloud](https://github.com/Agarych-ilya/Campus-backend/tree/feature/cloud)**. Маркет, публичные наборы и новые функции сообществ документированы для этой ветки и могут отсутствовать в текущем коде `main`. Клиент: **[features/services-screen](https://github.com/Agarych-ilya/CampusApp/tree/features/services-screen)**.
 
-```dotenv
-COMMUNITY_ADMIN_BARS_RECORD_BOOKS=ТВОЙ_НОМЕР_ЗАЧЁТКИ
-SESSION_SECRET=СЛУЧАЙНЫЙ_СЕКРЕТ_НЕ_КОРОЧЕ_32_СИМВОЛОВ
-COOKIE_SECURE=false
+## ⚙️ За что отвечает сервер
+
+| Модуль | Назначение |
+|:--|:--|
+| 📅 **Schedule** | Расписание студенческих групп и обращение к источникам данных МЭИ. |
+| 🔑 **Auth / BARS** | Аутентификация, сессии и проверка существующих сессий БАРС. |
+| 👥 **Communities** | Каталог, заявки, модерация, аватарки и публичная численность участников. |
+| 🛒 **Listings** | Маркет и бюро находок: объявления, изображения, изменение статуса и жалобы. |
+| 🧠 **Study** | Публикация общих наборов Campus Cards, поиск и рейтинг. |
+| ☁️ **File** | Загрузка, список, получение и удаление файлов. |
+
+<a id="быстрый-старт"></a>
+## 🚀 Быстрый старт
+
+**Требования:** Git, Node.js LTS (совместимый с NestJS 11), npm и MySQL.
+
+### 1 · Скачать проект
+
+```powershell
+git clone https://github.com/Agarych-ilya/Campus-backend.git
+cd Campus-backend
+git switch feature/cloud
+npm ci
 ```
 
-Номер сохрани точно (ведущие нули не удаляй). Нескольких
-администраторов можно указать через запятую.
-Чтобы создать секрет в PowerShell:
+### 2 · Подготовить MySQL
+
+Создай отдельную базу данных, например через MySQL CLI:
+
+```sql
+CREATE DATABASE IF NOT EXISTS campus_db
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
+```
+
+Настрой пользователя MySQL и его права. Часть таблиц сервисы создают при первом обращении. Если у пользователя БД нет права `CREATE TABLE`, подготовь схему заранее. SQL-файлы в `migrations/` покрывают базовые таблицы пользователей и сообществ, **но не все схемы новых сервисов**.
+
+### 3 · Настроить окружение
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+Пример локальных настроек **без реальных секретов**:
+
+```dotenv
+PORT=8000
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=campus_user
+DB_PASSWORD=YOUR_LOCAL_DB_PASSWORD
+DB_NAME=campus_db
+
+# Всегда используй длинный случайный секрет:
+SESSION_SECRET=REPLACE_WITH_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
+
+# Для HTTP через локальный ADB Reverse:
+COOKIE_SECURE=false
+
+# Необязательный список модераторов с проверенной зачёткой БАРС:
+COMMUNITY_ADMIN_BARS_RECORD_BOOKS=
+```
+
+Полный перечень параметров — в **[.env.example](https://github.com/Agarych-ilya/Campus-backend/blob/feature/cloud/.env.example)**.
+
+Генерация секрета сессии в Windows PowerShell:
 
 ```powershell
 $bytes = New-Object byte[] 48
@@ -52,283 +107,145 @@ $rng.GetBytes($bytes)
 $rng.Dispose()
 ```
 
-**Регистрация в таблице users для входа через БАРС не требуется.**
-Старые настройки COMMUNITY_ADMIN_USERNAMES и USER_IDS продолжат работать
-с прежним API логина по паролю, но новая админ-панель использует БАРС.
+Файл `.env` исключён из Git. Не добавляй туда реальные секреты, которые затем попадут в коммиты или скриншоты.
 
-### Запуск на локальном телефоне по USB
-
-Не передавай cookie БАРС по незашифрованной сети. Для локальной
-разработки используется ADB Reverse:
+### 4 · Запустить API
 
 ```powershell
-# В Campus-backend
 npm run start:dev
-# В другом PowerShell
-& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" -s AM5HJV5A09H00643 reverse tcp:8000 tcp:8000
-# В CampusApp
-flutter run -d AM5HJV5A09H00643 --dart-define=CAMPUS_API_BASE_URL=http://127.0.0.1:8000
 ```
 
-Зайди в CampusApp → Сервисы → Группы → значок администратора.
-Если сессия БАРС действительна, сервер проверит её и откроет модерацию
-автоматически. Иначе откроется WebView с обычным входом в БАРС.
-
-### Как это защищено
-
-- Flutter через WebViewCookieManager получает cookie БАРС, но не пароль.
-  Cookie передаются только на доверенный backend по HTTPS или
-  локальному ADB Reverse (127.0.0.1).
-- Сервер запрашивает фиксированные адреса
-  https://bars.mpei.ru/bars_web/ST/Student/ListStudent и
-  /bars_web/ST/Student/Main?studentID=...,
-  требует единственный профиль студента и одинаковый номер зачётки
-  на обеих страницах. Номер сравнивается с серверным списком
-  COMMUNITY_ADMIN_BARS_RECORD_BOOKS. Входящие ФИО/email/номер зачётки
-  от телефона никогда не используются как доказательство авторизации.
-- Cookie БАРС не сохраняются; вместо них выдаётся Campus-сессия
-  с CSRF. Права, подтверждённые БАРС, живут не более **30 минут**,
-  затем проходят повторную серверную проверку.
-- При изменениях верстки БАРС SSO безопасно откажет во входе
-  до исправления парсера. Это интеграция по cookie, **не официальный
-  OAuth/OIDC**, и для продакшена нужен HTTPS, безопасный сервер
-  сессий и корректная настройка TLS-прокси.
-
-Модерация позволяет подтверждать, отклонять, редактировать и удалять
-сообщества. Все изменяющие запросы требуют X-Community-CSRF.
-
-Тесты:
+В другом терминале:
 
 ```powershell
-npm test -- --runInBand community-admin.bars-login.spec.ts bars-session-verifier.service.spec.ts community-admin.guard.spec.ts
+curl.exe http://127.0.0.1:8000/health
+# {"status":"ok"}
 ```
 
-## Студенческие сообщества CampusApp
+Сервер использует порт **8000** по умолчанию или значение `PORT` из `.env`.
 
-Ветка `feature/cloud` содержит API каталога сообществ МЭИ:
+<a id="основные-маршруты"></a>
+## 🧭 Основные маршруты
 
-- `GET /services/groups` — возвращает встроенные и одобренные группы:
-  описание, Telegram/VK, автоматически полученную численность
-  `memberCount`, источник `memberCountSource` (`telegram`/`vk`),
-  время `memberCountCheckedAt` и признак приблизительного значения
-  `memberCountApproximate`. Пример: страница Telegram может показывать
-  `12.1K subscribers`, и тогда число помечается как приблизительное.
-- `POST /services/groups/submissions` — запрос `multipart/form-data`:
-  название `title`, `description`, `category`, `iconKind` (тип
-  резервной пиктограммы), `telegramUrl` и/или `vkUrl` и выбранная
-  пользователем картинка `icon` (PNG/JPEG/WebP, до 700 КБ).
-  Ответ `202 Accepted` и `{ "id": 123, "status": "pending" }`.
-  Старое поле `memberCount` сохраняется в DTO только для совместимости
-  с прежними клиентами, но **сервер его игнорирует**.
-- `GET /services/groups/icons/:id` — выдаёт выбранную автором иконку,
-  только если модератор одобрил соответствующее сообщество.
+| Метод | Маршрут | Назначение |
+|:--|:--|:--|
+| `GET` | `/health` | Проверка доступности API |
+| `GET` | `/schedule` | Расписание по группе и дате |
+| `POST` | `/auth/register` | Регистрация в backend |
+| `POST` | `/auth/login` | Вход в backend |
+| `GET` | `/file` | Список файлов |
+| `POST` | `/file/upload` | Загрузка файла |
+| `GET` | `/file/:id/download` | Получение файла |
+| `GET` | `/services/groups` | Каталог сообществ |
+| `POST` | `/services/groups/submissions` | Новая заявка |
+| `GET` | `/services/listings` | Маркет / бюро находок |
+| `POST` | `/services/listings` | Публикация объявления |
+| `GET` | `/services/study/decks` | Общие учебные наборы |
+| `POST` | `/services/study/decks` | Публикация набора |
+| `POST` | `/services/study/decks/:id/rating` | Оценка 1–5 звёзд |
 
-### Получение численности из соцсетей
+Изменение и удаление чужих объявлений и наборов ограничено сервером. Модерация сообществ использует защищённые маршруты `/services/admin/...`. Форматы тел запросов — в контроллерах внутри `src/`.
 
-Бэкенд регулярно обновляет статистику **при запросе каталога**, кешируя
-её на 15 минут. Число нельзя указать вручную. Записи в каталоге остаются
-доступными, даже если платформа не отдала число.
-
-Для Telegram сервер пытается получить число из публичной страницы
-`https://t.me/<username>` (доступность счётчика зависит от настроек
-сообщества). Если в `.env` настроен `TELEGRAM_BOT_TOKEN`, дополнительно
-используется официальный Bot API `getChatMemberCount`. Для закрытых
-групп бот должен иметь необходимый доступ; некоторые чаты не отдают
-численность без вступления бота.
-
-Для VK сервер вызывает `groups.getById` с `fields=members_count`
-через API ВКонтакте. Требуется действующий `VK_ACCESS_TOKEN` в
-локальном `.env` бэкенда; токен **никогда не добавляй в GitHub и
-не передавай во Flutter**. Когда у сообщества две ссылки, сначала
-используется счётчик Telegram, затем VK при недоступности первого.
-
-В `.env.example` добавлены необязательные переменные:
-```dotenv
-TELEGRAM_BOT_TOKEN=
-VK_ACCESS_TOKEN=
-```
-
-### Хранение и модерация
-
-Таблицы `campus_communities` и `campus_community_icons` создаются
-при первом обращении к каталогу, если у пользователя MySQL есть право
-`CREATE TABLE`. Если разрешения нет, примени SQL-файл
-`migrations/20261025_campus_communities.sql` вручную.
-
-Загруженные картинки хранятся отдельно в MySQL; публикуются только
-после одобрения. Новые заявки всегда имеют `status = 'pending'`.
-Для текущего MVP модератор проверяет их вручную в MySQL:
-
-```sql
-SELECT id, title, description, telegram_url, vk_url, created_at
-FROM campus_communities
-WHERE status = 'pending' ORDER BY created_at DESC;
-
-UPDATE campus_communities
-SET status = 'approved'
-WHERE id = 123 AND status = 'pending';
-
--- Или отклонить:
-UPDATE campus_communities
-SET status = 'rejected'
-WHERE id = 123 AND status = 'pending';
-```
-
-Проверяй описание, ссылки и изображения до публикации.
-Сейчас реализовано простое ограничение по IP (одна заявка за 10 минут
-в рамках одного процесса). Перед публичным релизом потребуется
-авторизация заявок, постоянный rate limiter и панель модератора.
-
-Тесты (запуск из папки бэкенда):
+<details>
+<summary><b>Примеры GET-запросов</b></summary>
 
 ```powershell
-npm test -- --runInBand services.service.spec.ts community-stats.service.spec.ts
+curl.exe "http://127.0.0.1:8000/schedule?group=YOUR_GROUP&date=2026-11-08"
+curl.exe "http://127.0.0.1:8000/services/groups"
+curl.exe "http://127.0.0.1:8000/services/study/decks"
 ```
 
-## CampusApp services API
+Вместо `YOUR_GROUP` укажи настоящую группу. `/health` проверяет доступность самого API, но не гарантирует работу внешнего источника расписания.
 
-The backend exposes a read-only catalog used by the Flutter application's
-**Services → Groups** section:
+</details>
 
-```http
-GET /services/groups
+<a id="архитектура"></a>
+## 🏗️ Архитектура
+
+```mermaid
+flowchart TD
+    F["Flutter · CampusApp"] --> A["NestJS REST API · :8000"]
+    A --> M[("MySQL")]
+    A --> S["БАРС / расписание МЭИ"]
+    A --> T["Telegram / VK\nпубличная статистика"]
+    A --> O["Файловое хранилище"]
 ```
 
-Example response:
-
-```json
-[
-  {
-    "title": "Чат студентов МЭИ",
-    "username": "mpeichat",
-    "subtitle": "Telegram · общение студентов"
-  },
-  {
-    "title": "Первый курс МЭИ",
-    "username": "mpei_1kurs",
-    "subtitle": "Telegram · первокурсники"
-  },
-  {
-    "title": "Подслушано МЭИ",
-    "username": "MPEImai",
-    "subtitle": "Telegram · канал"
-  }
-]
+```text
+src/
+├── auth/                 # Регистрация и сессии
+├── bars/                 # Интеграция с БАРС
+├── schedule/             # Расписание
+├── file/                 # Файлы
+├── services/
+│   ├── admin/            # Проверка БАРС и модерация
+│   ├── listings/         # Объявления и фотографии
+│   ├── study/            # Публичные наборы и рейтинги
+│   ├── services.controller.ts
+│   └── services.module.ts
+├── db.service.ts         # Пул соединений MySQL
+├── app.module.ts         # Корневой модуль
+└── main.ts               # CORS, сессии, запуск
+migrations/               # Базовые SQL-миграции
 ```
 
-The directory is deliberately public and read-only: it contains only
-public Telegram usernames and never holds student credentials or NFC card IDs.
-Edit `src/services/services.service.ts` to curate the catalog.
-The Flutter client validates Telegram handles and falls back to its bundled
-list when the server cannot be reached.
+<a id="авторизация-и-безопасность"></a>
+## 🔐 Авторизация и безопасность
 
-Run the backend with `npm run start:dev`, then test locally with
-`curl http://localhost:8000/services/groups`.
+**Модерация.** Клиент использует уже действующую сессию БАРС студента. Backend самостоятельно сверяет данные из БАРС с разрешёнными номерами зачётных книжек в `COMMUNITY_ADMIN_BARS_RECORD_BOOKS`. Присланные телефоном ФИО и номер зачётки сами по себе не дают права администратора.
 
-## CampusApp schedule API
+**Публикации.** Создание и изменение объявлений, публикация наборов и оценки используют серверную проверку подтверждённого пользователя. Собственный учебный набор оценивать нельзя; на чужой набор приходится одна обновляемая оценка пользователя.
 
-The `feature/cloud` branch also serves the app's weekly schedule:
+> [!IMPORTANT]
+> Cookie БАРС передавай только доверенному backend по **HTTPS** либо локально через **ADB Reverse → 127.0.0.1**. В продакшене необходимы TLS, `COOKIE_SECURE=true`, безопасное хранилище сессий и отдельный MySQL-пользователь с минимальными правами. `COOKIE_SECURE=false` подходит только для локальной разработки.
 
-```http
-GET /health
-GET /schedule?group=А-03-23&date=2026-10-19
-```
+| Переменная | Для чего |
+|:--|:--|
+| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | Подключение к MySQL |
+| `SESSION_SECRET` | Подпись сессий; для администрирования минимум 32 символа |
+| `COOKIE_SECURE` | Передача cookie только по HTTPS |
+| `COMMUNITY_ADMIN_BARS_RECORD_BOOKS` | Разрешённые номера зачётных книжек модераторов |
+| `CORS_ALLOWED_ORIGINS` | Разрешённые веб-источники |
+| `TELEGRAM_BOT_TOKEN`, `VK_ACCESS_TOKEN` | Необязательные интеграции для статистики групп |
 
-The `date` parameter is ISO `YYYY-MM-DD`. The server normalizes to
-Monday, searches for the selected group in the public MPEI RUZ service,
-loads the weekly timetable and returns
-`{ "group": "...", "date": "YYYY-MM-DD", "lessons": [...] }`.
-
-If the group is not found, the server returns 404. If the upstream
-RUZ lookup or MPEI timetable is unavailable, it returns 503 instead of
-silently reporting no lessons. The backend must be running and reachable
-from the Android emulator (`10.0.2.2:8000`) or an actual phone
-(the PC's LAN address) for online scheduling.
-
-PowerShell health check:
+<a id="тесты"></a>
+## 🧪 Тесты
 
 ```powershell
-curl.exe http://localhost:8000/health
+npm run build
+npm test -- --runInBand
+
+# Выборочные тесты
+npx jest study-public.service.spec.ts --runInBand
+npx jest listings.service.spec.ts --runInBand
+npx jest bars-session-verifier.service.spec.ts --runInBand
 ```
 
-Schedule lookup tests:
+Команды предназначены для локальной проверки и не означают, что в репозитории уже настроен CI.
 
-```bash
-npm test -- --runInBand schedule.service.spec.ts
+## 📱 Подключение Flutter
+
+После запуска API на компьютере:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" -s emulator-5554 reverse tcp:8000 tcp:8000
 ```
 
-## Description
+В каталоге Flutter-клиента:
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
-
-```bash
-$ npm install
+```powershell
+flutter run -d emulator-5554 --dart-define=CAMPUS_API_BASE_URL=http://127.0.0.1:8000
 ```
 
-## Compile and run the project
+Для телефона по USB подставь его ID из `flutter devices`. Подробнее — в **[README клиента](https://github.com/Agarych-ilya/CampusApp/blob/features/services-screen/README.md#быстрый-старт)**.
 
-```bash
-# development
-$ npm run start
+## 🧱 Статус проекта
 
-# watch mode
-$ npm run start:dev
+Сервер активно развивается. Интеграции БАРС, расписания и публичных страниц Telegram/VK зависят от сторонних источников и могут требовать адаптации. Эксперименты на Python находятся в `old_backend_python/`; основной сервер написан на NestJS.
 
-# production mode
-$ npm run start:prod
-```
+---
 
-## Run tests
-
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+<div align="center">
+  <b>Campus Backend</b> · API для студенческого CampusApp<br>
+  <sub><a href="https://github.com/Agarych-ilya/CampusApp">Flutter-клиент</a> · <a href="https://github.com/Agarych-ilya/Campus-backend">Исходный код сервера</a></sub>
+</div>
