@@ -40,8 +40,21 @@ export class BarsSessionVerifier {
         throw new Error('Unexpected BARS response');
       }
       return response.data;
-    } catch {
-      // Do not expose BARS session values or HTTP error details to clients.
+    } catch (error) {
+      // Log only a fixed endpoint label and numeric HTTP status.
+      // Never log cookies, full URLs, BARS HTML, or student identifiers.
+      const stage = path.startsWith('/bars_web/ST/Student/ListStudent')
+        ? 'student-list'
+        : path.startsWith('/bars_web/ST_Study/Main/Main')
+          ? 'study-profile'
+          : 'student-profile';
+      const status = axios.isAxiosError(error)
+        ? error.response?.status
+        : undefined;
+      this.logger.warn(
+        'BARS admin verification: request-failed stage=' + stage +
+        ' status=' + (typeof status === 'number' ? status : 'network-or-format'),
+      );
       throw new UnauthorizedException(
         'Не удалось проверить сессию БАРС. Войди в БАРС ещё раз.',
       );
