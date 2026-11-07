@@ -53,6 +53,10 @@ describe('BarsSessionVerifier', () => {
       'https://bars.mpei.ru/bars_web/ST/Student/Main?studentID=12345'],
     ['Main?studentID=12345',
       'https://bars.mpei.ru/bars_web/ST/Student/Main?studentID=12345'],
+    ['/bars_web/ST/Student/Main?studentID=bf3c6758-a323-4d8d-9b0c-62aefc6e3340',
+      'https://bars.mpei.ru/bars_web/ST/Student/Main?studentID=bf3c6758-a323-4d8d-9b0c-62aefc6e3340'],
+    ['/bars_web/ST/Student/Main?studentID=BF3C6758A3234D8D9B0C62AEFC6E3340',
+      'https://bars.mpei.ru/bars_web/ST/Student/Main?studentID=BF3C6758A3234D8D9B0C62AEFC6E3340'],
   ])('accepts BARS student-link format %s after checking both pages',
     async (href, expectedUrl) => {
       get.mockReset();
@@ -67,6 +71,17 @@ describe('BarsSessionVerifier', () => {
       expect(get.mock.calls[1][0]).toBe(expectedUrl);
     },
   );
+
+  it('rejects an unsupported student ID instead of forwarding it', async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({
+      status: 200,
+      data: studentList.replace('studentID=12345', 'studentID=not-a-valid-id'),
+    });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
 
   it('refuses duplicated studentID even for a BARS URL', async () => {
     get.mockReset();

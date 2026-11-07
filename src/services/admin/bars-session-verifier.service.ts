@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import axios from 'axios';
@@ -20,6 +21,7 @@ export interface VerifiedBarsStudent {
 @Injectable()
 export class BarsSessionVerifier {
   private readonly origin = 'https://bars.mpei.ru';
+  private readonly logger = new Logger(BarsSessionVerifier.name);
 
   private async fetchBars(path: string, cookies: string): Promise<string> {
     try {
@@ -93,35 +95,52 @@ export class BarsSessionVerifier {
     }
 
     let detailsPath: string;
+    // Diagnostic codes never contain cookies, full URLs, student IDs,
+    // or record-book numbers.
+    let rejectionReason = 'invalid-url';
     try {
-      if (!href) throw new Error('Missing or ambiguous student link');
-      // A relative "Main?..." should resolve beside ListStudent, not at /.
+      if (!href) {
+        rejectionReason = 'missing-or-ambiguous-link';
+        throw new Error('Invalid student link');
+      }
       const url = new URL(
         href, this.origin + '/bars_web/ST/Student/ListStudent',
       );
       const pathname = url.pathname.replace(/\/$/, '');
-      if (
-        url.origin !== this.origin ||
-        ![
-          '/bars_web/ST/Student/Main',
-          '/ST/Student/Main',
-        ].includes(pathname) ||
-        url.username || url.password || url.hash
-      ) {
-        throw new Error('Unexpected BARS profile link');
+      if (url.origin !== this.origin || url.username || url.password || url.hash) {
+        rejectionReason = 'unexpected-origin-or-fragment';
+        throw new Error('Unexpected BARS origin');
+      }
+      if (![
+        '/bars_web/ST/Student/Main',
+        '/ST/Student/Main',
+      ].includes(pathname)) {
+        rejectionReason = 'unexpected-path';
+        throw new Error('Unexpected BARS profile path');
       }
 
-      // The query key's casing can differ. Duplicate IDs are never trusted.
       const studentIds = [...url.searchParams.entries()]
         .filter(([key]) => key.toLowerCase() === 'studentid')
         .map(([, value]) => value);
-      if (studentIds.length !== 1 || !/^\d{1,16}$/.test(studentIds[0])) {
-        throw new Error('Invalid or ambiguous student ID');
+      if (studentIds.length !== 1) {
+        rejectionReason = 'missing-or-ambiguous-id';
+        throw new Error('Missing or ambiguous student ID');
+      }
+      const studentId = studentIds[0];
+      // BARS identifiers may be numeric or GUIDs; never grant admin access
+      // until the matching record book is read on both protected BARS pages.
+      const isIntegerId = /^\d{1,16}$/.test(studentId);
+      const isGuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(studentId)
+        || /^[0-9a-f]{32}$/i.test(studentId);
+      if (!isIntegerId && !isGuid) {
+        rejectionReason = 'unsupported-id-format';
+        throw new Error('Invalid student ID format');
       }
 
-      // Do not forward arbitrary parameters from the HTML to the BARS server.
-      detailsPath = pathname + '?studentID=' + studentIds[0];
+      // Discard all other query parameters from the student-list HTML.
+      detailsPath = pathname + '?studentID=' + encodeURIComponent(studentId);
     } catch {
+      this.logger.warn('Rejected BARS profile link (' + rejectionReason + ')');
       throw new UnauthorizedException('Некорректный профиль БАРС');
     }
 
