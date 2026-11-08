@@ -54,6 +54,49 @@ describe('RoomBookingsService', () => {
     expect(someoneElse.mine).toBeNull();
   });
 
+  it('books the lesson room, not hardcoded M-307', async () => {
+    const roomScope = { ...scope, room: 'C-401' };
+    const state = await service.availability(roomScope, owner);
+    expect(state.room).toBe('С-401');
+
+    await service.reserve(
+      { ...roomScope, row: 1, desk: 2, seat: 1 }, owner,
+    );
+    const insert = query.mock.calls.find(([sql]) =>
+      (sql as string).startsWith('INSERT'));
+    expect(insert?.[1]).toEqual([
+      'С-401', date, '1', 1, 2, 1, owner,
+    ]);
+
+    await service.cancel(roomScope, owner);
+    const removed = query.mock.calls.find(([sql]) =>
+      (sql as string).startsWith('DELETE'));
+    expect(removed?.[1]).toEqual(['С-401', date, '1', owner]);
+  });
+
+  it('never mixes occupied seats between rooms', async () => {
+    query.mockImplementation(async (sql: string, values: unknown[]) => {
+      if (sql.startsWith('SELECT')) {
+        return values[0] === 'С-401'
+          ? [{ row_num: 1, desk_num: 4, seat_num: 2, owner_key: other }]
+          : [];
+      }
+      return {};
+    });
+    const occupied = await service.availability({ ...scope, room: 'С-401' });
+    const empty = await service.availability({ ...scope, room: 'М-307' });
+    expect(occupied.available).toBe(53);
+    expect(empty.available).toBe(54);
+  });
+
+  it('rejects bogus room names instead of booking an arbitrary default', async () => {
+    await expect(service.availability({ ...scope, room: 'ЭО и ДОТ' }))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.reserve({
+      ...scope, room: 'М-307;DROP TABLE', row: 1, desk: 1, seat: 1,
+    }, owner)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('reserves a specific one of the 54 seats under verified identity', async () => {
     await service.reserve({ ...scope, row: 3, desk: 9, seat: 2 }, owner);
     const insert = query.mock.calls.find(([sql]) =>

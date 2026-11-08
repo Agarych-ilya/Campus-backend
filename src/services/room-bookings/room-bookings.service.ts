@@ -6,7 +6,8 @@ import {
 } from '@nestjs/common';
 import { DbService } from '../../db.service';
 import {
-  CreateRoomBookingDto, ROOM_BOOKING_SLOTS, ROOM_CODE, RoomBookingScope,
+  CreateRoomBookingDto, ROOM_BOOKING_SLOTS, RoomBookingScope,
+  normalizeBookingRoom,
 } from './room-bookings.dto';
 
 type SeatRow = {
@@ -48,7 +49,18 @@ export class RoomBookingsService {
     return this.schemaPromise;
   }
 
+  private roomCode(input: RoomBookingScope): string {
+    try {
+      return normalizeBookingRoom(input.room);
+    } catch (_) {
+      throw new BadRequestException(
+        'Номер аудитории должен быть в формате М-307 или С-401',
+      );
+    }
+  }
+
   private validateScope(input: RoomBookingScope): void {
+    this.roomCode(input);
     const { date, slot } = input;
     if (typeof date !== 'string' ||
         !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -75,19 +87,20 @@ export class RoomBookingsService {
     if (!Number.isInteger(input.row) || input.row < 1 || input.row > 3 ||
         !Number.isInteger(input.desk) || input.desk < 1 || input.desk > 9 ||
         !Number.isInteger(input.seat) || input.seat < 1 || input.seat > 2) {
-      throw new BadRequestException('Выбрано несуществующее место в М-307');
+      throw new BadRequestException('Выбрано несуществующее место в аудитории');
     }
   }
 
   async availability(scope: RoomBookingScope, ownerKey?: string) {
     this.validateScope(scope);
+    const room = this.roomCode(scope);
     await this.ensureSchema();
     const rows = await this.db.query(
       'SELECT row_num,desk_num,seat_num,owner_key ' +
       'FROM campus_room_seat_bookings ' +
       'WHERE room_code=? AND booking_date=? AND slot_id=? ' +
       'ORDER BY row_num,desk_num,seat_num',
-      [ROOM_CODE, scope.date, scope.slot],
+      [room, scope.date, scope.slot],
     ) as SeatRow[];
     const occupied = rows.map((item) => ({
       row: Number(item.row_num),
@@ -96,7 +109,7 @@ export class RoomBookingsService {
       mine: !!ownerKey && item.owner_key === ownerKey,
     }));
     return {
-      room: ROOM_CODE,
+      room,
       rows: 3,
       desksPerRow: 9,
       seatsPerDesk: 2,
@@ -107,8 +120,9 @@ export class RoomBookingsService {
       occupied,
       available: 54 - occupied.length,
       mine: occupied.find((item) => item.mine) ?? null,
-      // These are CampusApp demonstration reservations, not official
-      // occupancy data from the university.
+      // For other rooms, the 3x9x2 map is a *placeholder*, not
+      // a claim about actual seating or official availability.
+      // These are CampusApp demonstration reservations only.
       testMode: true,
     };
   }
@@ -116,6 +130,7 @@ export class RoomBookingsService {
   async reserve(input: CreateRoomBookingDto, ownerKey: string) {
     this.validateScope(input);
     this.validateSeat(input);
+    const room = this.roomCode(input);
     await this.ensureSchema();
 
     try {
@@ -124,7 +139,7 @@ export class RoomBookingsService {
         'INSERT INTO campus_room_seat_bookings ' +
         '(room_code,booking_date,slot_id,row_num,desk_num,seat_num,owner_key) ' +
         'VALUES (?,?,?,?,?,?,?)',
-        [ROOM_CODE, input.date, input.slot,
+        [room, input.date, input.slot,
           input.row, input.desk, input.seat, ownerKey],
       );
     } catch (error) {
@@ -141,11 +156,12 @@ export class RoomBookingsService {
 
   async cancel(scope: RoomBookingScope, ownerKey: string) {
     this.validateScope(scope);
+    const room = this.roomCode(scope);
     await this.ensureSchema();
     const result = await this.db.query(
       'DELETE FROM campus_room_seat_bookings ' +
       'WHERE room_code=? AND booking_date=? AND slot_id=? AND owner_key=?',
-      [ROOM_CODE, scope.date, scope.slot, ownerKey],
+      [room, scope.date, scope.slot, ownerKey],
     ) as { affectedRows: number };
     if (!result.affectedRows) {
       throw new NotFoundException('Бронирование на этот интервал не найдено');
