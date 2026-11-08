@@ -3,6 +3,7 @@ import {
 } from 'class-validator';
 
 export const ROOM_CODE = 'М-307';
+export const V308_ROOM_CODE = 'В-308';
 export const ROOM_BOOKING_SLOTS = [
   { id: '1', time: '09:20–10:55' },
   { id: '2', time: '11:10–12:45' },
@@ -44,12 +45,12 @@ export class RoomBookingQueryDto {
 }
 
 export class CreateRoomBookingDto extends RoomBookingQueryDto {
-  @IsInt() @Min(1) @Max(3)
+  @IsInt() @Min(1) @Max(10)
   row!: number;
 
   @IsInt() @Min(1) @Max(9)
   desk!: number;
 
-  @IsInt() @Min(1) @Max(2)
+  @IsInt() @Min(1) @Max(10)
   seat!: number;
 }
