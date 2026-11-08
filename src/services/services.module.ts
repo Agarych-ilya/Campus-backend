@@ -13,10 +13,12 @@ import { ListingsOwnerGuard } from './listings/listings-owner.guard';
 import { StudyPublicController } from './study/study-public.controller';
 import { StudyPublicService } from './study/study-public.service';
 import { ServicesService } from './services.service';
+import { LessonNotesController } from './lesson-notes/lesson-notes.controller';
+import { LessonNotesService } from './lesson-notes/lesson-notes.service';
 
 @Module({
   imports: [AuthModule],
-  controllers: [ServicesController, CommunityAdminController, ListingsController, StudyPublicController],
+  controllers: [ServicesController, CommunityAdminController, ListingsController, StudyPublicController, LessonNotesController],
   providers: [
     ServicesService,
     DbService,
@@ -27,6 +29,7 @@ import { ServicesService } from './services.service';
     ListingsService,
     ListingsOwnerGuard,
     StudyPublicService,
+    LessonNotesService,
   ],
 })
 export class ServicesModule {}
