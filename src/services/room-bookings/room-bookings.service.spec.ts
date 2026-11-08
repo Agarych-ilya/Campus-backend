@@ -68,6 +68,40 @@ describe('RoomBookingsService', () => {
       (sql as string).startsWith('INSERT'))).toBe(false);
   });
 
+  it('supports V-308 with 176 individually reservable seats', async () => {
+    const room = { ...scope, room: 'B-308' };
+    const data = await service.availability(room, owner);
+    expect(data.room).toBe('В-308');
+    expect(data.capacity).toBe(176);
+    expect(data.available).toBe(176);
+    expect(data.rows).toBe(10);
+    expect(data.desksPerRow).toBe(2);
+    expect(data.rowSpecs).toHaveLength(10);
+    expect(data.rowSpecs?.[0].seatsPerSide).toBe(10);
+    expect(data.rowSpecs?.[4].seatsPerSide).toBe(8);
+
+    await service.reserve({
+      ...room, row: 4, desk: 2, seat: 10,
+    }, owner);
+    await service.reserve({
+      ...room, row: 10, desk: 1, seat: 8,
+    }, other);
+    const inserts = query.mock.calls.filter(([sql]) =>
+      (sql as string).startsWith('INSERT'));
+    expect(inserts[0][1]).toEqual(['В-308', date, '1', 4, 2, 10, owner]);
+    expect(inserts[1][1]).toEqual(['В-308', date, '1', 10, 1, 8, other]);
+
+    await expect(service.reserve({
+      ...room, row: 5, desk: 1, seat: 9,
+    }, other)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.reserve({
+      ...room, row: 11, desk: 1, seat: 1,
+    }, other)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.reserve({
+      ...room, row: 1, desk: 3, seat: 1,
+    }, other)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('still accepts the configured classroom in Latin or Cyrillic spelling', async () => {
     const data = await service.availability({ ...scope, room: 'M-307' }, owner);
     expect(data.room).toBe('М-307');
