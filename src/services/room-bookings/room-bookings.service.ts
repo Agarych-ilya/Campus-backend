@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { DbService } from '../../db.service';
 import {
-  CreateRoomBookingDto, ROOM_BOOKING_SLOTS, ROOM_CODE, RoomBookingScope,
+  CreateRoomBookingDto, ROOM_BOOKING_SLOTS, ROOM_CODE, V308_ROOM_CODE, RoomBookingScope,
   normalizeBookingRoom,
 } from './room-bookings.dto';
 
@@ -56,9 +56,9 @@ export class RoomBookingsService {
     } catch (_) {
       throw new BadRequestException('Некорректный номер аудитории');
     }
-    if (room !== ROOM_CODE) {
+    if (room !== ROOM_CODE && room !== V308_ROOM_CODE) {
       throw new BadRequestException(
-        'Тестовое бронирование доступно только для аудитории М-307',
+        'Тестовое бронирование доступно только для М-307 и В-308',
       );
     }
     return room;
@@ -88,10 +88,17 @@ export class RoomBookingsService {
     }
   }
 
-  private validateSeat(input: CreateRoomBookingDto): void {
-    if (!Number.isInteger(input.row) || input.row < 1 || input.row > 3 ||
-        !Number.isInteger(input.desk) || input.desk < 1 || input.desk > 9 ||
-        !Number.isInteger(input.seat) || input.seat < 1 || input.seat > 2) {
+  private validateSeat(input: CreateRoomBookingDto, room: string): void {
+    const { row, desk, seat } = input;
+    const valid = room === V308_ROOM_CODE
+      ? Number.isInteger(row) && row >= 1 && row <= 10 &&
+        Number.isInteger(desk) && (desk === 1 || desk === 2) &&
+        Number.isInteger(seat) && seat >= 1 &&
+        seat <= (row <= 4 ? 10 : 8)
+      : Number.isInteger(row) && row >= 1 && row <= 3 &&
+        Number.isInteger(desk) && desk >= 1 && desk <= 9 &&
+        Number.isInteger(seat) && seat >= 1 && seat <= 2;
+    if (!valid) {
       throw new BadRequestException('Выбрано несуществующее место в аудитории');
     }
   }
@@ -113,19 +120,30 @@ export class RoomBookingsService {
       seat: Number(item.seat_num),
       mine: !!ownerKey && item.owner_key === ownerKey,
     }));
+    const isV308 = room === V308_ROOM_CODE;
+    const capacity = isV308 ? 176 : 54;
     return {
       room,
-      rows: 3,
-      desksPerRow: 9,
-      seatsPerDesk: 2,
-      capacity: 54,
+      rows: isV308 ? 10 : 3,
+      desksPerRow: isV308 ? 2 : 9,
+      seatsPerDesk: isV308 ? 10 : 2,
+      capacity,
+      // V-308: 4 upper tiers with 10 seats on each side,
+      // then 6 lower tiers with 8 seats on each side.
+      // desk=1 is left sector, desk=2 is right sector;
+      // seat=1 is nearest the central aisle.
+      ...(isV308 ? {
+        rowSpecs: Array.from({ length: 10 }, (_, index) => ({
+          row: index + 1,
+          seatsPerSide: index < 4 ? 10 : 8,
+        })),
+      } : {}),
       date: scope.date,
       slot: scope.slot,
       slots: ROOM_BOOKING_SLOTS,
       occupied,
-      available: 54 - occupied.length,
+      available: capacity - occupied.length,
       mine: occupied.find((item) => item.mine) ?? null,
-      // Only M-307 has a configured 3x9x2 test seating layout.
       // These are CampusApp demo reservations, not official MPEI data.
       testMode: true,
     };
@@ -133,8 +151,8 @@ export class RoomBookingsService {
 
   async reserve(input: CreateRoomBookingDto, ownerKey: string) {
     this.validateScope(input);
-    this.validateSeat(input);
     const room = this.roomCode(input);
+    this.validateSeat(input, room);
     await this.ensureSchema();
 
     try {
