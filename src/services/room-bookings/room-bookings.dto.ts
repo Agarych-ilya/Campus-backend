@@ -3,6 +3,9 @@ import {
 } from 'class-validator';
 
 export const ROOM_CODE = 'М-307';
+export const AMPHITHEATER_ROOM_CODE = 'В-308';
+// Four upper rows with 10 seats per bank; six lower rows with 8.
+export const AMPHITHEATER_CAPACITY = 4 * 10 * 2 + 6 * 8 * 2;
 export const ROOM_BOOKING_SLOTS = [
   { id: '1', time: '09:20–10:55' },
   { id: '2', time: '11:10–12:45' },
@@ -24,7 +27,7 @@ export function normalizeBookingRoom(raw: string | undefined): string {
   const [building, number] = input.split('-');
   const map: Record<string, string> = {
     M: 'М', C: 'С', A: 'А', K: 'К', P: 'Р',
-    T: 'Т', H: 'Н', B: 'В', E: 'Е', O: 'О', X: 'Х',
+    T: 'Т', H: 'Н', B: 'В', V: 'В', E: 'Е', O: 'О', X: 'Х',
   };
   const normalized = building.split('').map(ch => map[ch] ?? ch).join('');
   return normalized + '-' + number;
@@ -44,10 +47,10 @@ export class RoomBookingQueryDto {
 }
 
 export class CreateRoomBookingDto extends RoomBookingQueryDto {
-  @IsInt() @Min(1) @Max(3)
+  @IsInt() @Min(1) @Max(10)
   row!: number;
 
-  @IsInt() @Min(1) @Max(9)
+  @IsInt() @Min(1) @Max(10)
   desk!: number;
 
   @IsInt() @Min(1) @Max(2)

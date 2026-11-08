@@ -73,6 +73,62 @@ describe('RoomBookingsService', () => {
     expect(data.room).toBe('М-307');
   });
 
+  it('offers 176 seats in В-308: four red and six blue rows per bank', async () => {
+    const roomScope = { ...scope, room: 'V-308' };
+    const result = await service.availability(roomScope, owner);
+    expect(result.room).toBe('В-308');
+    expect(result.capacity).toBe(176);
+    expect(result.available).toBe(176);
+    expect(result.layout).toBe('amphitheater');
+    expect(result.rows).toBe(10);
+
+    await service.reserve(
+      { ...roomScope, row: 4, desk: 10, seat: 2 }, owner,
+    );
+    const insert = query.mock.calls.find(([sql]) =>
+      (sql as string).startsWith('INSERT'));
+    expect(insert?.[1]).toEqual([
+      'В-308', date, '1', 4, 10, 2, owner,
+    ]);
+  });
+
+  it('limits В-308 blue rows to eight seats per side', async () => {
+    const place = (row: number, desk: number) => ({
+      ...scope, room: 'В-308', row, desk, seat: 1,
+    });
+    await service.reserve(place(5, 8), owner);
+    await service.reserve(place(10, 8), owner);
+    await expect(service.reserve(place(5, 9), owner))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.reserve(place(10, 10), owner))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.reserve(place(11, 1), owner))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.reserve(place(1, 11), owner))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('keeps В-308 and М-307 occupancy separate and cancels by room', async () => {
+    query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.startsWith('SELECT')) {
+        return params?.[0] === 'В-308'
+          ? [{ row_num: 5, desk_num: 8, seat_num: 2, owner_key: owner }]
+          : [];
+      }
+      if (sql.startsWith('DELETE')) return { affectedRows: 1 };
+      return {};
+    });
+    const large = await service.availability({...scope, room: 'В-308'}, owner);
+    const small = await service.availability({...scope, room: 'М-307'}, owner);
+    expect(large.available).toBe(175);
+    expect(large.mine).toEqual({ row: 5, desk: 8, seat: 2, mine: true });
+    expect(small.available).toBe(54);
+    await service.cancel({...scope, room: 'В-308'}, owner);
+    const remove = query.mock.calls.find(([sql]) =>
+      (sql as string).startsWith('DELETE'));
+    expect(remove?.[1]).toEqual(['В-308', date, '1', owner]);
+  });
+
   it('rejects bogus room names instead of booking an arbitrary default', async () => {
     await expect(service.availability({ ...scope, room: 'ЭО и ДОТ' }))
       .rejects.toBeInstanceOf(BadRequestException);
