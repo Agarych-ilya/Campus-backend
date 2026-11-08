@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { DbService } from '../../db.service';
 import {
-  CreateRoomBookingDto, ROOM_BOOKING_SLOTS, RoomBookingScope,
+  CreateRoomBookingDto, ROOM_BOOKING_SLOTS, ROOM_CODE, RoomBookingScope,
   normalizeBookingRoom,
 } from './room-bookings.dto';
 
@@ -50,13 +50,18 @@ export class RoomBookingsService {
   }
 
   private roomCode(input: RoomBookingScope): string {
+    let room: string;
     try {
-      return normalizeBookingRoom(input.room);
+      room = normalizeBookingRoom(input.room);
     } catch (_) {
+      throw new BadRequestException('Некорректный номер аудитории');
+    }
+    if (room !== ROOM_CODE) {
       throw new BadRequestException(
-        'Номер аудитории должен быть в формате М-307 или С-401',
+        'Тестовое бронирование доступно только для аудитории М-307',
       );
     }
+    return room;
   }
 
   private validateScope(input: RoomBookingScope): void {
@@ -120,9 +125,8 @@ export class RoomBookingsService {
       occupied,
       available: 54 - occupied.length,
       mine: occupied.find((item) => item.mine) ?? null,
-      // For other rooms, the 3x9x2 map is a *placeholder*, not
-      // a claim about actual seating or official availability.
-      // These are CampusApp demonstration reservations only.
+      // Only M-307 has a configured 3x9x2 test seating layout.
+      // These are CampusApp demo reservations, not official MPEI data.
       testMode: true,
     };
   }

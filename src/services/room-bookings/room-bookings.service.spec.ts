@@ -54,39 +54,23 @@ describe('RoomBookingsService', () => {
     expect(someoneElse.mine).toBeNull();
   });
 
-  it('books the lesson room, not hardcoded M-307', async () => {
-    const roomScope = { ...scope, room: 'C-401' };
-    const state = await service.availability(roomScope, owner);
-    expect(state.room).toBe('С-401');
+  it('rejects other rooms for availability, booking and cancellation', async () => {
+    const otherRoom = { ...scope, room: 'C-401' };
+    await expect(service.availability(otherRoom, owner))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.reserve({
+      ...otherRoom, row: 1, desk: 1, seat: 1,
+    }, owner)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.cancel(otherRoom, owner))
+      .rejects.toBeInstanceOf(BadRequestException);
 
-    await service.reserve(
-      { ...roomScope, row: 1, desk: 2, seat: 1 }, owner,
-    );
-    const insert = query.mock.calls.find(([sql]) =>
-      (sql as string).startsWith('INSERT'));
-    expect(insert?.[1]).toEqual([
-      'С-401', date, '1', 1, 2, 1, owner,
-    ]);
-
-    await service.cancel(roomScope, owner);
-    const removed = query.mock.calls.find(([sql]) =>
-      (sql as string).startsWith('DELETE'));
-    expect(removed?.[1]).toEqual(['С-401', date, '1', owner]);
+    expect(query.mock.calls.some(([sql]) =>
+      (sql as string).startsWith('INSERT'))).toBe(false);
   });
 
-  it('never mixes occupied seats between rooms', async () => {
-    query.mockImplementation(async (sql: string, values: unknown[]) => {
-      if (sql.startsWith('SELECT')) {
-        return values[0] === 'С-401'
-          ? [{ row_num: 1, desk_num: 4, seat_num: 2, owner_key: other }]
-          : [];
-      }
-      return {};
-    });
-    const occupied = await service.availability({ ...scope, room: 'С-401' });
-    const empty = await service.availability({ ...scope, room: 'М-307' });
-    expect(occupied.available).toBe(53);
-    expect(empty.available).toBe(54);
+  it('still accepts the configured classroom in Latin or Cyrillic spelling', async () => {
+    const data = await service.availability({ ...scope, room: 'M-307' }, owner);
+    expect(data.room).toBe('М-307');
   });
 
   it('rejects bogus room names instead of booking an arbitrary default', async () => {
