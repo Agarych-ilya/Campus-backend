@@ -16,10 +16,12 @@ import { ServicesService } from './services.service';
 import { LessonNotesController } from './lesson-notes/lesson-notes.controller';
 import { LessonNotesService } from './lesson-notes/lesson-notes.service';
 import { LessonGroupGuard } from './lesson-notes/lesson-group.guard';
+import { RoomBookingsController } from './room-bookings/room-bookings.controller';
+import { RoomBookingsService } from './room-bookings/room-bookings.service';
 
 @Module({
   imports: [AuthModule],
-  controllers: [ServicesController, CommunityAdminController, ListingsController, StudyPublicController, LessonNotesController],
+  controllers: [ServicesController, CommunityAdminController, ListingsController, StudyPublicController, LessonNotesController, RoomBookingsController],
   providers: [
     ServicesService,
     DbService,
@@ -32,6 +34,7 @@ import { LessonGroupGuard } from './lesson-notes/lesson-group.guard';
     StudyPublicService,
     LessonNotesService,
     LessonGroupGuard,
+    RoomBookingsService,
   ],
 })
 export class ServicesModule {}
