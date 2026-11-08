@@ -238,7 +238,16 @@ export class ScheduleService {
                     ),
                 );
 
-                const groupId = String((exact ?? results[0])?.id ?? '');
+                // Never silently load the first search suggestion:
+                // a partial name may match multiple unrelated groups.
+                if (!exact) {
+                    throw new NotFoundException(
+                        'Группа «' + normalizedGroup +
+                            '» не найдена точно. Выбери группу из подсказок.',
+                    );
+                }
+
+                const groupId = String(exact.id);
 
                 if (!/^\d+$/.test(groupId)) {
                     throw new NotFoundException(

@@ -63,6 +63,19 @@ describe('ScheduleService: MPEI group lookup', () => {
     expect(id).toBe('202');
   });
 
+  it('rejects a non-exact group instead of silently using first result', async () => {
+    jest.spyOn(axios, 'get').mockResolvedValue({
+      data: [
+        { id: 101, label: 'А-03-22' },
+        { id: 202, label: 'А-03-23' },
+      ],
+    } as never);
+
+    await expect(
+      (service as any).getGroupId('А-03'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
   it('retries official HTTP when the HTTPS search is unavailable', async () => {
     const get = jest.spyOn(axios, 'get');
     get.mockRejectedValueOnce(new Error('TLS handshake failed'));
