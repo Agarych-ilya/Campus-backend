@@ -13,6 +13,11 @@ export class ScheduleController {
         private readonly scheduleService: ScheduleService,
     ) { }
 
+    @Get('groups')
+    searchGroups(@Query('q') query = '') {
+        return this.scheduleService.searchGroups(query);
+    }
+
     @Get('debug')
     getScheduleDebug(
         @Query('group') group?: string,

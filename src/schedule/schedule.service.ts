@@ -1,6 +1,7 @@
 import {
     Injectable,
     NotFoundException,
+    BadRequestException,
     ServiceUnavailableException,
 } from '@nestjs/common';
 import axios from 'axios';
@@ -36,6 +37,60 @@ type DebugRow = {
 
 @Injectable()
 export class ScheduleService {
+    // Autocomplete directly from MPEI RUZ; no hard-coded group catalogue.
+    async searchGroups(query: string): Promise<string[]> {
+        const term = query.trim();
+        if (term.length < 2) return [];
+        if (term.length > 70) {
+            throw new BadRequestException('Слишком длинный запрос группы');
+        }
+
+        let lastError: unknown;
+        for (const origin of ['https://ts.mpei.ru', 'http://ts.mpei.ru']) {
+            try {
+                const { data } = await axios.get<unknown>(
+                    origin + '/api/search?term=' +
+                        encodeURIComponent(term) + '&type=group',
+                    {
+                        timeout: 10000,
+                        maxRedirects: 5,
+                        headers: {
+                            accept: 'application/json, text/plain, */*',
+                            referer: 'https://ts.mpei.ru/ruz/main',
+                            'user-agent': 'Mozilla/5.0 CampusApp Schedule',
+                        },
+                    },
+                );
+                const payload = data as {
+                    data?: unknown;
+                    results?: unknown;
+                } | null;
+                const candidates: unknown = Array.isArray(data)
+                    ? data
+                    : Array.isArray(payload?.data)
+                        ? payload.data
+                        : payload?.results;
+                if (!Array.isArray(candidates)) return [];
+
+                const names = candidates
+                    .map((item): string | null => {
+                        if (!item || typeof item !== 'object') return null;
+                        const entry = item as MpeiGroupSearchItem;
+                        const name = entry.name ?? entry.label ?? entry.value;
+                        return typeof name === 'string' ? name.trim() : null;
+                    })
+                    .filter((name): name is string => !!name);
+                return [...new Set(names)].slice(0, 25);
+            } catch (error) {
+                lastError = error;
+            }
+        }
+        console.error('MPEI group autocomplete failed:', lastError);
+        throw new ServiceUnavailableException(
+            'Поиск групп МЭИ временно недоступен',
+        );
+    }
+
     async getSchedule(group: string, date: string) {
         const groupId = await this.getGroupId(group);
 
