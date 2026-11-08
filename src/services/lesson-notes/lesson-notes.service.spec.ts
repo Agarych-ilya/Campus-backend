@@ -34,7 +34,7 @@ describe('LessonNotesService', () => {
   });
 
   it('keeps notes within the exact group and lesson', async () => {
-    await notes.list(scope);
+    await notes.list(scope, ownerKey);
     const selectCall = query.mock.calls.find(
       ([sql]) => (sql as string).startsWith('SELECT id, owner_key, content, created_at '),
     );
@@ -61,17 +61,29 @@ describe('LessonNotesService', () => {
       if (sql.startsWith('SELECT owner_key')) return [{owner_key: ownerKey}];
       return [];
     });
-    await expect(notes.remove(3, 'b'.repeat(64)))
+    await expect(notes.remove(3, 'b'.repeat(64), scope.group))
       .rejects.toBeInstanceOf(ForbiddenException);
     expect(query.mock.calls.some(
       ([sql]) => (sql as string).startsWith('DELETE'),
     )).toBe(false);
   });
 
+  it('refuses deletion when verified group differs, even for the note author', async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('CREATE')) return [];
+      if (sql.startsWith('SELECT owner_key')) {
+        return [{owner_key: ownerKey, group_name: scope.group}];
+      }
+      return [];
+    });
+    await expect(notes.remove(3, ownerKey, 'А-04-23'))
+      .rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it('rejects missing content and invalid dates', async () => {
     await expect(notes.create({...scope, content: '   '}, ownerKey))
       .rejects.toBeInstanceOf(BadRequestException);
-    await expect(notes.list({...scope, date: '2026-02-30'}))
+    await expect(notes.list({...scope, date: '2026-02-30'}, ownerKey))
       .rejects.toBeInstanceOf(BadRequestException);
   });
 });

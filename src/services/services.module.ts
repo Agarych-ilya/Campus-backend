@@ -15,6 +15,7 @@ import { StudyPublicService } from './study/study-public.service';
 import { ServicesService } from './services.service';
 import { LessonNotesController } from './lesson-notes/lesson-notes.controller';
 import { LessonNotesService } from './lesson-notes/lesson-notes.service';
+import { LessonGroupGuard } from './lesson-notes/lesson-group.guard';
 
 @Module({
   imports: [AuthModule],
@@ -30,6 +31,7 @@ import { LessonNotesService } from './lesson-notes/lesson-notes.service';
     ListingsOwnerGuard,
     StudyPublicService,
     LessonNotesService,
+    LessonGroupGuard,
   ],
 })
 export class ServicesModule {}

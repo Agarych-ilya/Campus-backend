@@ -3,6 +3,7 @@ import {
 } from '@nestjs/common';
 import { DbService } from '../../db.service';
 import { CreateGroupLessonNoteDto, LessonNoteScopeDto } from './lesson-notes.dto';
+import { normalizedStudyGroup } from './lesson-group-normalizer';
 
 type NoteRow = {
   id: number | string;
@@ -44,7 +45,7 @@ export class LessonNotesService {
   }
 
   private normalize(scope: LessonNoteScopeDto) {
-    const group = scope.group.trim().toUpperCase();
+    const group = normalizedStudyGroup(scope.group);
     const subject = scope.subject.replace(/\s+/g, ' ').trim();
     const time = scope.time.replace(/\s+/g, ' ').trim();
     const date = scope.date;
@@ -109,14 +110,15 @@ export class LessonNotesService {
     return this.present(rows[0], ownerKey);
   }
 
-  async remove(id: number, ownerKey: string) {
+  async remove(id: number, ownerKey: string, verifiedGroup: string) {
     await this.ensureSchema();
     const rows = await this.db.query(
-      'SELECT owner_key FROM campus_group_lesson_notes WHERE id=? LIMIT 1',
+      'SELECT owner_key, group_name FROM campus_group_lesson_notes WHERE id=? LIMIT 1',
       [id],
-    ) as Array<{owner_key: string}>;
+    ) as Array<{owner_key: string; group_name: string}>;
     if (!rows.length) throw new NotFoundException('Заметка не найдена');
-    if (rows[0].owner_key !== ownerKey) {
+    if (rows[0].owner_key !== ownerKey ||
+      normalizedStudyGroup(rows[0].group_name) !== normalizedStudyGroup(verifiedGroup)) {
       throw new ForbiddenException('Удалить заметку может только её автор');
     }
     await this.db.query(
