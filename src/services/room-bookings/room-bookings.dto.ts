@@ -47,12 +47,12 @@ export class RoomBookingQueryDto {
 }
 
 export class CreateRoomBookingDto extends RoomBookingQueryDto {
-  @IsInt() @Min(1) @Max(10)
+  @IsInt() @Min(1) @Max(100)
   row!: number;
 
-  @IsInt() @Min(1) @Max(10)
+  @IsInt() @Min(1) @Max(100)
   desk!: number;
 
-  @IsInt() @Min(1) @Max(2)
+  @IsInt() @Min(1) @Max(20)
   seat!: number;
 }
