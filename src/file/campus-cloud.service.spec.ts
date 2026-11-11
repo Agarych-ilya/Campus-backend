@@ -103,6 +103,18 @@ describe('CampusCloudService security', () => {
     expect(select[1]).toEqual([owner, 'А-03-23']);
   });
 
+  test('folder search combines name filtering with owner/group/public ACL', async () => {
+    await cloud.folders(ownerViewer, 'all', 'Физика');
+    const select = query.mock.calls.find(([sql]) =>
+      String(sql).startsWith('SELECT * FROM campus_cloud_folders WHERE ('));
+    expect(select).toBeDefined();
+    expect(select[0]).toContain(
+      "WHERE (owner_key=? OR visibility='public' OR (visibility='group'",
+    );
+    expect(select[0]).toContain('AND LOWER(name) LIKE ?');
+    expect(select[1]).toEqual([owner, 'А-03-23', '%физика%']);
+  });
+
   test('renaming a folder leaves its file access and share links unchanged', async () => {
     query.mockImplementation(async (sql: string) => {
       if (sql.startsWith('SELECT * FROM campus_cloud_folders')) {
