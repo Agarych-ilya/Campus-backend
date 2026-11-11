@@ -374,6 +374,7 @@ export class CampusCloudService {
    */
   async finishFolderMigration(viewer: CloudViewer, id: number, body: any) {
     const owner = this.owner(viewer);
+    await this.ensure();
     const received: unknown = body?.fileIds;
     if (!Array.isArray(received) || received.length > 500 ||
         received.some(value => !Number.isSafeInteger(value) || value < 1) ||
