@@ -166,19 +166,6 @@ export class CampusCloudService {
         params.push('%' + escaped + '%');
       }
       const rows = await this.db.query(
-        "SELECT * FROM campus_cloud_folders WHERE owner_key=? " +
-        "OR visibility='public' " +
-        "OR (visibility='group' AND group_code=?) " +
-        'ORDER BY id DESC LIMIT 150',
-        [owner, viewer.group ?? ''],
-      ) as FolderRow[];
-      return rows.map(row => ({
-        id: Number(row.id), name: row.name,
-        visibility: row.visibility, group: row.group_code,
-        mine: row.owner_key === owner,
-      }));
-    }') + '%');
-      const rows = await this.db.query(
         "SELECT * FROM campus_cloud_folders WHERE (owner_key=? " +
         "OR visibility='public' " +
         "OR (visibility='group' AND group_code=?)) " +
