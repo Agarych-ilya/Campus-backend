@@ -117,7 +117,7 @@ describe('CampusCloudService security', () => {
         return [{ id: 10, name: 'Конспект.pdf', size_bytes: 400 }];
       }
       if (sql.startsWith('SELECT * FROM campus_cloud_files')) {
-        return [{ ...sample, folder_id: 7 }];
+        return [{ ...sample, folder_id: params?.[0] === 12 ? 99 : 7 }];
       }
       if (sql.startsWith('SELECT')) return [];
       return { affectedRows: 1 };
