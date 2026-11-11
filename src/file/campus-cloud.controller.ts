@@ -132,6 +132,19 @@ export class CampusCloudController {
     return this.service.createFolder(this.viewer(req), dto);
   }
 
+  @Get('folders/:id/migration')
+  @UseGuards(ListingsOwnerGuard)
+  migrationManifest(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+    return this.service.migrationManifest(this.viewer(req), id);
+  }
+
+  @Post('folders/:id/migrate-to-device')
+  @UseGuards(ListingsOwnerGuard)
+  finishMigration(@Req() req: any,
+    @Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+    return this.service.finishFolderMigration(this.viewer(req), id, dto);
+  }
+
   @Patch('folders/:id')
   @UseGuards(ListingsOwnerGuard)
   updateFolder(@Req() req: any, @Param('id', ParseIntPipe) id: number,
