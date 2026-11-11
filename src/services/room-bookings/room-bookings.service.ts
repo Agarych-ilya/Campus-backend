@@ -6,9 +6,8 @@ import {
 } from '@nestjs/common';
 import { DbService } from '../../db.service';
 import {
-  CreateRoomBookingDto, ROOM_BOOKING_SLOTS, ROOM_CODE,
-  AMPHITHEATER_ROOM_CODE, AMPHITHEATER_CAPACITY, RoomBookingScope,
-  normalizeBookingRoom,
+  CreateRoomBookingDto, ROOM_BOOKING_SLOTS, AMPHITHEATER_ROOM_CODE,
+  RoomBookingScope, normalizeBookingRoom,
 } from './room-bookings.dto';
 import { makeInitialRoomLayouts, RoomLayout } from './room-layouts';
 
@@ -189,7 +188,7 @@ export class RoomBookingsService {
     }));
     return {
       room,
-      layout: amphitheater ? 'amphitheater' : 'desks',
+      layoutType: amphitheater ? 'amphitheater' : 'desks',
       rows: Math.max(0, ...layout.seats.map((seat) => seat.row)),
       desksPerRow: Math.max(0, ...layout.seats.map((seat) => seat.desk)),
       seatsPerDesk: Math.max(0, ...layout.seats.map((seat) => seat.seat)),
