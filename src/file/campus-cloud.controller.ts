@@ -12,14 +12,13 @@ import type { Response } from 'express';
 import { ListingsOwnerGuard } from '../services/listings/listings-owner.guard';
 import { CampusCloudService, CloudViewer } from './campus-cloud.service';
 
-const storageRoot = resolve(
-  process.env.CAMPUS_CLOUD_STORAGE_DIR || 'cloud-private',
-);
 const storage = diskStorage({
   destination: (_req, _file, callback) => {
+    // Resolve after ConfigModule has loaded .env, not during module import.
+    const root = resolve(process.env.CAMPUS_CLOUD_STORAGE_DIR || 'cloud-private');
     try {
-      mkdirSync(storageRoot, { recursive: true });
-      callback(null, storageRoot);
+      mkdirSync(root, { recursive: true });
+      callback(null, root);
     } catch (error) { callback(error as Error, ''); }
   },
   filename: (_req, _file, callback) => callback(null, randomUUID()),
