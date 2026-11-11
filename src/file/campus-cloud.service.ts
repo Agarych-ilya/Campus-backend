@@ -297,8 +297,8 @@ export class CampusCloudService {
   }
 
   async upload(viewer: CloudViewer, uploaded: Express.Multer.File, body: any) {
-    await this.ensure();
     try {
+      await this.ensure();
       if (!uploaded || !uploaded.size || uploaded.size > 20 * 1024 * 1024) {
         throw new BadRequestException('Файл должен быть не больше 20 МБ');
       }
