@@ -47,6 +47,9 @@ node_modules/
 # Build
 dist/
 coverage/
+
+# Private Cloud Campus user uploads (store on a persistent volume)
+cloud-private/
 *.tsbuildinfo
 
 # Prisma generated files
