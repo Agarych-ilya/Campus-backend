@@ -50,8 +50,9 @@ export class CampusCloudController {
   }
 
   @Get('folders')
-  folders(@Req() req: any, @Query('mode') mode?: string) {
-    return this.service.folders(this.viewer(req), mode);
+  folders(@Req() req: any, @Query('mode') mode?: string,
+    @Query('q') query?: string) {
+    return this.service.folders(this.viewer(req), mode, query);
   }
 
   @Post('folders')
