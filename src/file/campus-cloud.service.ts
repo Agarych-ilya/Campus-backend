@@ -240,6 +240,13 @@ export class CampusCloudService {
     const visibility = this.scope(body?.visibility ?? 'private');
     const group = visibility === 'group' ? this.group(viewer) : null;
     const name = this.name(body?.name);
+    const existing = await this.db.query(
+      'SELECT COUNT(*) AS count FROM campus_cloud_folders WHERE owner_key=?',
+      [owner],
+    ) as Array<{ count: number }>;
+    if (Number(existing[0]?.count ?? 0) >= 100) {
+      throw new BadRequestException('Не больше 100 папок на пользователя');
+    }
     const result = await this.db.query(
       'INSERT INTO campus_cloud_folders ' +
       '(owner_key,name,visibility,group_code) VALUES (?,?,?,?)',
@@ -296,6 +303,15 @@ export class CampusCloudService {
         throw new BadRequestException('Файл должен быть не больше 20 МБ');
       }
       const owner = this.owner(viewer);
+      const usage = await this.db.query(
+        'SELECT COUNT(*) AS count,COALESCE(SUM(size_bytes),0) AS bytes ' +
+        'FROM campus_cloud_files WHERE owner_key=?', [owner],
+      ) as Array<{ count: number; bytes: number }>;
+      if (Number(usage[0]?.count ?? 0) >= 500 ||
+          Number(usage[0]?.bytes ?? 0) + uploaded.size >
+            512 * 1024 * 1024) {
+        throw new BadRequestException('Лимит облака: 500 файлов или 512 МБ');
+      }
       const name = this.name(uploaded.originalname);
       const folderId = await this.ownedFolder(body?.folderId, viewer);
       const folder = folderId ? await this.folderRow(folderId) : null;
