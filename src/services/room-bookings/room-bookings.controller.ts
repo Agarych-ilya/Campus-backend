@@ -1,6 +1,6 @@
 import {
   Body, Controller, Delete, Get, HttpCode, HttpStatus,
-  Post, Query, Req, UseGuards, UsePipes, ValidationPipe,
+  Param, Post, Query, Req, UseGuards, UsePipes, ValidationPipe,
 } from '@nestjs/common';
 import { ListingsOwnerGuard } from '../listings/listings-owner.guard';
 import { CreateRoomBookingDto, RoomBookingQueryDto } from './room-bookings.dto';
@@ -24,6 +24,17 @@ export class RoomBookingsController {
       /^[a-f0-9]{64}$/.test(session?.listingOwnerKey ?? '')
       ? session.listingOwnerKey
       : undefined;
+  }
+
+  /** Public catalogue and geometry, loaded by any CampusApp version. */
+  @Get('rooms')
+  roomCatalogue() {
+    return this.bookings.rooms();
+  }
+
+  @Get('rooms/:room/layout')
+  layout(@Param('room') room: string) {
+    return this.bookings.getRoomLayout(room);
   }
 
   @Get()
