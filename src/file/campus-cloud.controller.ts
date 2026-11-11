@@ -12,7 +12,9 @@ import type { Response } from 'express';
 import { ListingsOwnerGuard } from '../services/listings/listings-owner.guard';
 import { CampusCloudService, CloudViewer } from './campus-cloud.service';
 
-const storageRoot = resolve(process.cwd(), 'cloud-private');
+const storageRoot = resolve(
+  process.env.CAMPUS_CLOUD_STORAGE_DIR || 'cloud-private',
+);
 const storage = diskStorage({
   destination: (_req, _file, callback) => {
     try {
