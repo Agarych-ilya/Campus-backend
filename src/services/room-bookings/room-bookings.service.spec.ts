@@ -88,6 +88,9 @@ describe('RoomBookingsService', () => {
     expect(result.capacity).toBe(176);
     expect(result.available).toBe(176);
     expect(result.layout.seats).toHaveLength(176);
+    expect(result.layout.seats.find((item) => item.row === 10 &&
+      item.desk === 8 && item.seat === 2)?.label)
+      .toBe('Ряд 1, правая сторона, место 8');
     expect(result.layout.elements.some((e) => e.id === 'lower-block')).toBe(true);
     expect(result.rows).toBe(10);
 
@@ -155,6 +158,9 @@ describe('RoomBookingsService', () => {
     expect(rooms.map((room) => room.room)).toEqual(['М-307', 'В-308']);
     const layout = await service.getRoomLayout('М-307');
     expect(layout.seats).toHaveLength(54);
+    expect(layout.seats.find((item) => item.row === 3 &&
+      item.desk === 8 && item.seat === 2)?.label)
+      .toBe('Ряд 3, парта 8, правое место');
     expect(layout.elements.filter((item) => item.type === 'outlet'))
       .toHaveLength(2);
   });
