@@ -10,6 +10,7 @@ import {
   AMPHITHEATER_ROOM_CODE, AMPHITHEATER_CAPACITY, RoomBookingScope,
   normalizeBookingRoom,
 } from './room-bookings.dto';
+import { makeInitialRoomLayouts, RoomLayout } from './room-layouts';
 
 type SeatRow = {
   row_num: number;
@@ -23,6 +24,76 @@ export class RoomBookingsService {
   constructor(private readonly db: DbService) {}
 
   private schemaPromise?: Promise<void>;
+  private layoutSchemaPromise?: Promise<void>;
+
+  /** Database is the source of truth for rooms and their actual seats. */
+  private ensureLayoutSchema(): Promise<void> {
+    if (!this.layoutSchemaPromise) {
+      this.layoutSchemaPromise = (async () => {
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_room_layouts (' +
+          'room_code VARCHAR(12) NOT NULL PRIMARY KEY, ' +
+          'university VARCHAR(120) NOT NULL, ' +
+          'building VARCHAR(12) NOT NULL, ' +
+          'name VARCHAR(120) NOT NULL, ' +
+          'description VARCHAR(250) NOT NULL, ' +
+          'enabled TINYINT(1) NOT NULL DEFAULT 1, ' +
+          'layout_json JSON NOT NULL, ' +
+          'updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ' +
+          'ON UPDATE CURRENT_TIMESTAMP' +
+          ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
+        // Seed once only. Editing a layout in MySQL does not get overwritten.
+        for (const layout of makeInitialRoomLayouts()) {
+          await this.db.query(
+            'INSERT IGNORE INTO campus_room_layouts ' +
+            '(room_code,university,building,name,description,layout_json) ' +
+            'VALUES (?,?,?,?,?,?)',
+            [layout.room, layout.university, layout.building, layout.name,
+              layout.description, JSON.stringify(layout)],
+          );
+        }
+      })().catch((error: unknown) => {
+        this.layoutSchemaPromise = undefined;
+        throw error;
+      });
+    }
+    return this.layoutSchemaPromise;
+  }
+
+  async rooms() {
+    await this.ensureLayoutSchema();
+    return this.db.query(
+      'SELECT room_code AS room, university, building, name, description ' +
+      'FROM campus_room_layouts WHERE enabled=1 ORDER BY room_code',
+    );
+  }
+
+  async getRoomLayout(rawRoom: string | undefined): Promise<RoomLayout> {
+    let room: string;
+    try {
+      room = normalizeBookingRoom(rawRoom);
+    } catch (_) {
+      throw new BadRequestException('Некорректный номер аудитории');
+    }
+    await this.ensureLayoutSchema();
+    const records = await this.db.query(
+      'SELECT layout_json FROM campus_room_layouts ' +
+      'WHERE room_code=? AND enabled=1', [room],
+    ) as Array<{ layout_json: unknown }>;
+    if (!records.length) {
+      throw new BadRequestException('Для этой аудитории схема пока не настроена');
+    }
+    const raw = records[0].layout_json;
+    const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!data || typeof data !== 'object' ||
+        !Array.isArray((data as RoomLayout).seats) ||
+        !Array.isArray((data as RoomLayout).elements) ||
+        (data as RoomLayout).room !== room) {
+      throw new BadRequestException('Схема аудитории повреждена');
+    }
+    return data as RoomLayout;
+  }
 
   private ensureSchema(): Promise<void> {
     if (!this.schemaPromise) {
@@ -57,11 +128,6 @@ export class RoomBookingsService {
     } catch (_) {
       throw new BadRequestException('Некорректный номер аудитории');
     }
-    if (room !== ROOM_CODE && room !== AMPHITHEATER_ROOM_CODE) {
-      throw new BadRequestException(
-        'Тестовое бронирование доступно только для М-307 и В-308',
-      );
-    }
     return room;
   }
 
@@ -89,18 +155,14 @@ export class RoomBookingsService {
     }
   }
 
-  private validateSeat(input: CreateRoomBookingDto, room: string): void {
-    const validBase = Number.isInteger(input.row) &&
-      Number.isInteger(input.desk) && Number.isInteger(input.seat) &&
-      input.row >= 1 && input.desk >= 1 &&
-      (input.seat === 1 || input.seat === 2);
-    // В-308: row=1..10, desk=seat number within the bank,
-    // seat=1 for the left bank and 2 for the right bank.
-    const allowed = room === ROOM_CODE
-      ? validBase && input.row <= 3 && input.desk <= 9
-      : validBase && input.row <= 10 &&
-        input.desk <= (input.row <= 4 ? 10 : 8);
-    if (!allowed) {
+  private validateSeat(input: CreateRoomBookingDto, layout: RoomLayout): void {
+    const { row, desk, seat } = input;
+    const exists = Number.isInteger(row) && Number.isInteger(desk) &&
+      Number.isInteger(seat) &&
+      layout.seats.some((position) =>
+        position.row === row && position.desk === desk &&
+        position.seat === seat);
+    if (!exists) {
       throw new BadRequestException('Выбрано несуществующее место в аудитории');
     }
   }
@@ -109,6 +171,7 @@ export class RoomBookingsService {
     this.validateScope(scope);
     const room = this.roomCode(scope);
     await this.ensureSchema();
+    const layout = await this.getRoomLayout(room);
     const rows = await this.db.query(
       'SELECT row_num,desk_num,seat_num,owner_key ' +
       'FROM campus_room_seat_bookings ' +
@@ -117,7 +180,7 @@ export class RoomBookingsService {
       [room, scope.date, scope.slot],
     ) as SeatRow[];
     const amphitheater = room === AMPHITHEATER_ROOM_CODE;
-    const capacity = amphitheater ? AMPHITHEATER_CAPACITY : 54;
+    const capacity = layout.seats.length;
     const occupied = rows.map((item) => ({
       row: Number(item.row_num),
       desk: Number(item.desk_num),
@@ -127,10 +190,11 @@ export class RoomBookingsService {
     return {
       room,
       layout: amphitheater ? 'amphitheater' : 'desks',
-      rows: amphitheater ? 10 : 3,
-      desksPerRow: amphitheater ? 10 : 9,
-      seatsPerDesk: 2,
+      rows: Math.max(0, ...layout.seats.map((seat) => seat.row)),
+      desksPerRow: Math.max(0, ...layout.seats.map((seat) => seat.desk)),
+      seatsPerDesk: Math.max(0, ...layout.seats.map((seat) => seat.seat)),
       capacity,
+      layout,
       date: scope.date,
       slot: scope.slot,
       slots: ROOM_BOOKING_SLOTS,
@@ -146,8 +210,9 @@ export class RoomBookingsService {
   async reserve(input: CreateRoomBookingDto, ownerKey: string) {
     this.validateScope(input);
     const room = this.roomCode(input);
-    this.validateSeat(input, room);
     await this.ensureSchema();
+    const layout = await this.getRoomLayout(room);
+    this.validateSeat(input, layout);
 
     try {
       // Atomic uniqueness is enforced by MySQL, not a racy availability check.
@@ -174,6 +239,7 @@ export class RoomBookingsService {
     this.validateScope(scope);
     const room = this.roomCode(scope);
     await this.ensureSchema();
+    await this.getRoomLayout(room);
     const result = await this.db.query(
       'DELETE FROM campus_room_seat_bookings ' +
       'WHERE room_code=? AND booking_date=? AND slot_id=? AND owner_key=?',
