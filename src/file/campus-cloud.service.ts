@@ -149,7 +149,20 @@ export class CampusCloudService {
     };
   }
 
-  async folders(viewer: CloudViewer, mode = 'mine') {
+  async folders(viewer: CloudViewer, mode = 'mine', rawQuery = '') {
+    await this.ensure();
+    const q = String(rawQuery).trim();
+    if (q.length > 100) {
+      throw new BadRequestException('Слишком длинный поиск');
+    }
+    if (mode === 'all') {
+      const owner = this.owner(viewer);
+      const params: unknown[] = [owner, viewer.group ?? ''];
+      const filter = q
+        ? ' AND LOWER(name) LIKE ?'
+        : '';
+      if (q) params.push('%' + q.toLowerCase()
+        .replace(/[%_\\]/g, '\\  async folders(viewer: CloudViewer, mode = 'mine') {
     await this.ensure();
     if (mode === 'all') {
       const owner = this.owner(viewer);
@@ -159,6 +172,19 @@ export class CampusCloudService {
         "OR (visibility='group' AND group_code=?) " +
         'ORDER BY id DESC LIMIT 150',
         [owner, viewer.group ?? ''],
+      ) as FolderRow[];
+      return rows.map(row => ({
+        id: Number(row.id), name: row.name,
+        visibility: row.visibility, group: row.group_code,
+        mine: row.owner_key === owner,
+      }));
+    }') + '%');
+      const rows = await this.db.query(
+        "SELECT * FROM campus_cloud_folders WHERE (owner_key=? " +
+        "OR visibility='public' " +
+        "OR (visibility='group' AND group_code=?)) " +
+        filter + ' ORDER BY id DESC LIMIT 150',
+        params,
       ) as FolderRow[];
       return rows.map(row => ({
         id: Number(row.id), name: row.name,
