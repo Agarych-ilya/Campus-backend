@@ -573,7 +573,7 @@ export class CampusCloudService {
   async readSharedFolderFile(token: string, rawId: number) {
     const folder = await this.sharedFolder(token);
     const file = await this.fileRow(rawId);
-    if (file.folder_id !== Number(folder.id) ||
+    if (Number(file.folder_id) !== Number(folder.id) ||
         file.owner_key !== folder.owner_key) {
       throw new NotFoundException('Файл отсутствует в этой папке');
     }
