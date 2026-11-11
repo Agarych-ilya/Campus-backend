@@ -26,7 +26,9 @@ type FolderRow = {
 export class CampusCloudService {
   constructor(private readonly db: DbService) {}
   private ready?: Promise<void>;
-  private readonly storage = resolve(process.cwd(), 'cloud-private');
+  private readonly storage = resolve(
+    process.env.CAMPUS_CLOUD_STORAGE_DIR || 'cloud-private',
+  );
 
   private ensure(): Promise<void> {
     if (!this.ready) {
@@ -301,6 +303,9 @@ export class CampusCloudService {
         : this.scope(body?.visibility ?? 'private');
       const group = visibility === 'group' ? this.group(viewer) : null;
       const mime = this.sniffMime(await fs.readFile(uploaded.path), uploaded.mimetype);
+      if (mime.startsWith('image/') && uploaded.size > 5 * 1024 * 1024) {
+        throw new BadRequestException('Изображения — максимум 5 МБ');
+      }
       const result = await this.db.query(
         'INSERT INTO campus_cloud_files ' +
         '(owner_key,name,path,mime,size_bytes,folder_id,visibility,group_code) ' +
