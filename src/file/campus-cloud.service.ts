@@ -1,5 +1,5 @@
 import {
-  BadRequestException, ForbiddenException, Injectable,
+  BadRequestException, ConflictException, ForbiddenException, Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
@@ -308,6 +308,153 @@ export class CampusCloudService {
       [owner, name, visibility, group],
     ) as { insertId: number };
     return { id: Number(result.insertId), name, visibility, group };
+  }
+
+  /**
+   * Manifest for a private on-device copy. Bookmarks are copied too, but
+   * foreign originals are never deleted by this user's migration.
+   */
+  private readonly migrationQuery =
+    'SELECT f.id,f.name,f.size_bytes,f.path,f.owner_key,f.visibility,' +
+    'f.group_code FROM campus_cloud_files f WHERE ' +
+    '(f.owner_key=? AND f.folder_id=?) OR EXISTS (' +
+    'SELECT 1 FROM campus_cloud_saved s WHERE s.file_id=f.id ' +
+    'AND s.owner_key=? AND s.folder_id=?) ' +
+    'ORDER BY f.id LIMIT 501';
+
+  private validateMigrationRows(rows: Array<{
+    id: number | string; owner_key: string;
+    visibility: CloudScope; group_code: string | null;
+    size_bytes: number | string; name: string; path: string;
+  }>, viewer: CloudViewer) {
+    if (rows.length > 500) {
+      throw new BadRequestException('В папке слишком много файлов для переноса');
+    }
+    for (const file of rows) {
+      if (!this.canRead({
+        ...file, id: Number(file.id), folder_id: null,
+        mime: '', share_hash: null, created_at: '',
+        size_bytes: Number(file.size_bytes),
+      }, viewer)) {
+        throw new ConflictException(
+          'Некоторые сохранённые материалы больше не доступны. ' +
+          'Удали недоступные ярлыки из папки и повтори перенос',
+        );
+      }
+    }
+  }
+
+  async migrationManifest(viewer: CloudViewer, id: number) {
+    const folder = await this.folderRow(id);
+    if (folder.owner_key !== this.owner(viewer)) {
+      throw new ForbiddenException('Перенести можно только свою папку');
+    }
+    const rows = await this.db.query(this.migrationQuery,
+      [viewer.key, id, viewer.key, id]) as Array<{
+      id: number | string; name: string; size_bytes: number | string;
+      path: string; owner_key: string; visibility: CloudScope;
+      group_code: string | null;
+    }>;
+    this.validateMigrationRows(rows, viewer);
+    return {
+      folderId: id,
+      name: folder.name,
+      files: rows.map(file => ({
+        id: Number(file.id), name: file.name,
+        size: Number(file.size_bytes),
+        owned: file.owner_key === viewer.key,
+      })),
+    };
+  }
+
+  /**
+   * Finalize only after Flutter has verified *every* local copy. The exact
+   * server IDs must still match the manifest; otherwise nothing is deleted.
+   * All DB revocations, bookmarks and file metadata are removed together.
+   */
+  async finishFolderMigration(viewer: CloudViewer, id: number, body: any) {
+    const owner = this.owner(viewer);
+    const received: unknown = body?.fileIds;
+    if (!Array.isArray(received) || received.length > 500 ||
+        received.some(value => !Number.isSafeInteger(value) || value < 1) ||
+        new Set(received).size !== received.length) {
+      throw new BadRequestException('Некорректный список перенесённых файлов');
+    }
+    const requestedIds = (received as number[]).slice()
+      .sort((a, b) => a - b);
+    const pathsToClean = await this.db.withTransaction(async connection => {
+      const [folderResult] = await connection.execute(
+        'SELECT owner_key FROM campus_cloud_folders ' +
+        'WHERE id=? FOR UPDATE', [id],
+      );
+      const folders = folderResult as Array<{owner_key: string}>;
+      if (!folders.length) {
+        throw new NotFoundException('Папка уже недоступна');
+      }
+      if (folders[0].owner_key !== owner) {
+        throw new ForbiddenException('Чужая папка');
+      }
+      const [fileResult] = await connection.execute(
+        this.migrationQuery, [owner, id, owner, id],
+      );
+      const rows = fileResult as Array<{
+        id: number | string; name: string; size_bytes: number | string;
+        path: string; owner_key: string; visibility: CloudScope;
+        group_code: string | null;
+      }>;
+      this.validateMigrationRows(rows, viewer);
+      const currentIds = rows.map(row => Number(row.id))
+        .sort((a,b) => a-b);
+      if (currentIds.length !== requestedIds.length ||
+          currentIds.some((item, index) => item !== requestedIds[index])) {
+        throw new ConflictException(
+          'Состав папки изменился. Обнови её и повтори перенос без удаления файлов',
+        );
+      }
+
+      const owned = rows.filter(row => row.owner_key === owner);
+      const ownIds = owned.map(row => Number(row.id));
+      // Remove bookmarks inside this folder, including foreign-file links.
+      await connection.execute(
+        'DELETE FROM campus_cloud_saved WHERE owner_key=? AND folder_id=?',
+        [owner, id],
+      );
+      if (ownIds.length) {
+        const placeholders = ownIds.map(() => '?').join(',');
+        // Invalidate any other student's bookmarks of the owner's files.
+        await connection.execute(
+          'DELETE FROM campus_cloud_saved WHERE file_id IN (' +
+          placeholders + ')', ownIds,
+        );
+      }
+      // Deleting files invalidates individual share URLs immediately.
+      await connection.execute(
+        'DELETE FROM campus_cloud_files ' +
+        'WHERE owner_key=? AND folder_id=?', [owner, id],
+      );
+      // The folder token must be revoked in the same DB transaction.
+      await connection.execute(
+        'DELETE FROM campus_cloud_folder_links WHERE folder_id=?', [id],
+      );
+      await connection.execute(
+        'DELETE FROM campus_cloud_folders WHERE id=? AND owner_key=?',
+        [id, owner],
+      );
+      return owned.map(row => row.path);
+    });
+
+    // Physical content is not exposed by the API after the transaction.
+    // A filesystem failure leaves an orphan to clean, never an accessible file.
+    for (const path of pathsToClean) {
+      const full = resolve(path);
+      if (full.startsWith(this.storage + sep)) {
+        await fs.unlink(full).catch(() => undefined);
+      }
+    }
+    return {
+      migrated: true, deleted: pathsToClean.length,
+      revoked: true,
+    };
   }
 
   async updateFolder(viewer: CloudViewer, id: number, body: any) {
