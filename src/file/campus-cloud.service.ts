@@ -421,8 +421,9 @@ export class CampusCloudService {
     }
     const visibility = this.scope(body?.visibility);
     const group = visibility === 'group' ? this.group(viewer) : null;
+    // A visibility change invalidates any previously distributed secret link.
     await this.db.query(
-      'UPDATE campus_cloud_files SET visibility=?,group_code=? ' +
+      'UPDATE campus_cloud_files SET visibility=?,group_code=?,share_hash=NULL ' +
       'WHERE id=? AND owner_key=?', [visibility, group, id, owner],
     );
     return { visibility, group };
