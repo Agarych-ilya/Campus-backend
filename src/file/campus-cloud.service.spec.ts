@@ -147,6 +147,18 @@ describe('CampusCloudService security', () => {
       ) && params[0] === 'group' && params[1] === 'А-03-23')).toBe(true);
   });
 
+  test('unified file listing includes own, group and public materials', async () => {
+    await cloud.list(ownerViewer, { mode: 'search' });
+    const select = query.mock.calls.find(([sql]) =>
+      String(sql).startsWith('SELECT f.*'));
+    expect(select).toBeDefined();
+    expect(select[0]).toContain("f.visibility='public'");
+    expect(select[0]).toContain("f.visibility='group'");
+    expect(select[0]).toContain('OR f.owner_key=?');
+    expect(select[0]).not.toContain('f.owner_key<>?');
+    expect(select[1]).toEqual([owner, 'А-03-23', owner]);
+  });
+
   test('search query uses server-side ACL constraints', async () => {
     await cloud.list(ownerViewer, { mode: 'discover', q: 'ЛР' });
     const select = query.mock.calls.find(([sql]) =>
