@@ -150,8 +150,22 @@ export class CampusCloudController {
 
   @Post('files/:id/link')
   @UseGuards(ListingsOwnerGuard)
-  link(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
-    return this.service.createLink(this.viewer(req), id);
+  async link(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
+    const result = await this.service.createLink(this.viewer(req), id);
+    // Only an operator-configured HTTPS public origin can be shared remotely.
+    const configured = process.env.CAMPUS_PUBLIC_URL?.trim().replace(/\/$/, '');
+    let publicUrl: string | null = null;
+    if (configured) {
+      try {
+        const origin = new URL(configured);
+        if (origin.protocol === 'https:' && !origin.username &&
+            !origin.password && origin.pathname === '/' &&
+            !origin.search && !origin.hash) {
+          publicUrl = origin.origin + '/cloud/s/' + result.token;
+        }
+      } catch (_) {}
+    }
+    return { ...result, url: publicUrl };
   }
 
   @Delete('files/:id/link')
