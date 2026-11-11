@@ -50,6 +50,8 @@ coverage/
 
 # Private Cloud Campus user uploads (store on a persistent volume)
 cloud-private/
+# Legacy uploads must not be committed again.
+cloud/
 *.tsbuildinfo
 
 # Prisma generated files
