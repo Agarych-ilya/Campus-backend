@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { DbService } from '../../db.service';
 import { RoomBookingsService } from './room-bookings.service';
+import { makeInitialRoomLayouts } from './room-layouts';
 
 describe('RoomBookingsService', () => {
   let service: RoomBookingsService;
@@ -9,9 +10,15 @@ describe('RoomBookingsService', () => {
   const other = 'b'.repeat(64);
   const date = new Date().toISOString().slice(0, 10);
   const scope = { date, slot: '1' };
+  const seededLayouts = makeInitialRoomLayouts();
+  const layoutRows = (params?: unknown[]) => {
+    const layout = seededLayouts.find((item) => item.room === params?.[0]);
+    return layout ? [{ layout_json: JSON.stringify(layout) }] : [];
+  };
 
   beforeEach(() => {
-    query = jest.fn().mockImplementation(async (sql: string) => {
+    query = jest.fn().mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.startsWith('SELECT layout_json')) return layoutRows(params);
       if (sql.startsWith('SELECT')) return [];
       if (sql.startsWith('DELETE')) return { affectedRows: 1 };
       return {};
@@ -36,7 +43,8 @@ describe('RoomBookingsService', () => {
   });
 
   it('shows occupied seats but only reveals a mine flag to the owner', async () => {
-    query.mockImplementation(async (sql: string) => {
+    query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.startsWith('SELECT layout_json')) return layoutRows(params);
       if (sql.startsWith('SELECT')) {
         return [{ row_num: 2, desk_num: 5, seat_num: 1, owner_key: owner }];
       }
@@ -65,7 +73,7 @@ describe('RoomBookingsService', () => {
       .rejects.toBeInstanceOf(BadRequestException);
 
     expect(query.mock.calls.some(([sql]) =>
-      (sql as string).startsWith('INSERT'))).toBe(false);
+      (sql as string).startsWith('INSERT INTO campus_room_seat_bookings'))).toBe(false);
   });
 
   it('still accepts the configured classroom in Latin or Cyrillic spelling', async () => {
@@ -79,14 +87,15 @@ describe('RoomBookingsService', () => {
     expect(result.room).toBe('В-308');
     expect(result.capacity).toBe(176);
     expect(result.available).toBe(176);
-    expect(result.layout).toBe('amphitheater');
+    expect(result.layout.seats).toHaveLength(176);
+    expect(result.layout.elements.some((e) => e.id === 'lower-block')).toBe(true);
     expect(result.rows).toBe(10);
 
     await service.reserve(
       { ...roomScope, row: 4, desk: 10, seat: 2 }, owner,
     );
     const insert = query.mock.calls.find(([sql]) =>
-      (sql as string).startsWith('INSERT'));
+      (sql as string).startsWith('INSERT INTO campus_room_seat_bookings'));
     expect(insert?.[1]).toEqual([
       'В-308', date, '1', 4, 10, 2, owner,
     ]);
@@ -110,6 +119,7 @@ describe('RoomBookingsService', () => {
 
   it('keeps В-308 and М-307 occupancy separate and cancels by room', async () => {
     query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.startsWith('SELECT layout_json')) return layoutRows(params);
       if (sql.startsWith('SELECT')) {
         return params?.[0] === 'В-308'
           ? [{ row_num: 5, desk_num: 8, seat_num: 2, owner_key: owner }]
@@ -129,6 +139,48 @@ describe('RoomBookingsService', () => {
     expect(remove?.[1]).toEqual(['В-308', date, '1', owner]);
   });
 
+  it('serves a room catalogue from MySQL with editable layouts', async () => {
+    query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.startsWith('SELECT room_code AS room')) {
+        return seededLayouts.map((item) => ({
+          room: item.room, university: item.university,
+          building: item.building, name: item.name,
+          description: item.description,
+        }));
+      }
+      if (sql.startsWith('SELECT layout_json')) return layoutRows(params);
+      return {};
+    });
+    const rooms = await service.rooms() as Array<{room: string}>;
+    expect(rooms.map((room) => room.room)).toEqual(['М-307', 'В-308']);
+    const layout = await service.getRoomLayout('М-307');
+    expect(layout.seats).toHaveLength(54);
+    expect(layout.elements.filter((item) => item.type === 'outlet'))
+      .toHaveLength(2);
+  });
+
+  it('uses seats from the stored layout, not fixed per-room dimensions', async () => {
+    query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.startsWith('SELECT layout_json')) {
+        const stored = seededLayouts.find((item) => item.room === params?.[0])!;
+        return [{ layout_json: JSON.stringify({
+          ...stored, seats: [stored.seats[0]],
+        }) }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {};
+    });
+    const data = await service.availability(scope);
+    expect(data.capacity).toBe(1);
+    const allowed = seededLayouts[0].seats[0];
+    await service.reserve({
+      ...scope, row: allowed.row, desk: allowed.desk, seat: allowed.seat,
+    }, owner);
+    await expect(service.reserve({
+      ...scope, row: 3, desk: 9, seat: 2,
+    }, owner)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('rejects bogus room names instead of booking an arbitrary default', async () => {
     await expect(service.availability({ ...scope, room: 'ЭО и ДОТ' }))
       .rejects.toBeInstanceOf(BadRequestException);
@@ -140,13 +192,15 @@ describe('RoomBookingsService', () => {
   it('reserves a specific one of the 54 seats under verified identity', async () => {
     await service.reserve({ ...scope, row: 3, desk: 9, seat: 2 }, owner);
     const insert = query.mock.calls.find(([sql]) =>
-      (sql as string).startsWith('INSERT'));
+      (sql as string).startsWith('INSERT INTO campus_room_seat_bookings'));
     expect(insert?.[1]).toEqual(['М-307', date, '1', 3, 9, 2, owner]);
   });
 
   it('converts a database unique constraint violation to a conflict', async () => {
-    query.mockImplementation(async (sql: string) => {
-      if (sql.startsWith('INSERT')) throw { code: 'ER_DUP_ENTRY' };
+    query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.startsWith('SELECT layout_json')) return layoutRows(params);
+      if (sql.startsWith('INSERT INTO campus_room_seat_bookings'))
+        throw { code: 'ER_DUP_ENTRY' };
       if (sql.startsWith('SELECT')) return [];
       return {};
     });
@@ -178,7 +232,8 @@ describe('RoomBookingsService', () => {
   });
 
   it('cannot cancel a booking that is not its own', async () => {
-    query.mockImplementation(async (sql: string) => {
+    query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.startsWith('SELECT layout_json')) return layoutRows(params);
       if (sql.startsWith('DELETE')) return { affectedRows: 0 };
       return {};
     });
