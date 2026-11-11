@@ -415,10 +415,17 @@ export class CampusCloudService {
       const owned = rows.filter(row => row.owner_key === owner);
       const ownIds = owned.map(row => Number(row.id));
       // Remove bookmarks inside this folder, including foreign-file links.
-      await connection.execute(
+      const [removedBookmarkResult] = await connection.execute(
         'DELETE FROM campus_cloud_saved WHERE owner_key=? AND folder_id=?',
         [owner, id],
       );
+      const bookmarkCount = rows.filter(row => row.owner_key !== owner).length;
+      if ((removedBookmarkResult as {affectedRows: number}).affectedRows !==
+          bookmarkCount) {
+        throw new ConflictException(
+          'Состав сохранённых файлов изменился. Повтори перенос',
+        );
+      }
       if (ownIds.length) {
         const placeholders = ownIds.map(() => '?').join(',');
         // Invalidate any other student's bookmarks of the owner's files.
@@ -428,10 +435,16 @@ export class CampusCloudService {
         );
       }
       // Deleting files invalidates individual share URLs immediately.
-      await connection.execute(
+      const [removedFilesResult] = await connection.execute(
         'DELETE FROM campus_cloud_files ' +
         'WHERE owner_key=? AND folder_id=?', [owner, id],
       );
+      if ((removedFilesResult as {affectedRows: number}).affectedRows !==
+          owned.length) {
+        throw new ConflictException(
+          'Состав файлов изменился во время переноса. Повтори операцию',
+        );
+      }
       // The folder token must be revoked in the same DB transaction.
       await connection.execute(
         'DELETE FROM campus_cloud_folder_links WHERE folder_id=?', [id],
