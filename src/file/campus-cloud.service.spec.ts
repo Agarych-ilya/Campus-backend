@@ -93,6 +93,60 @@ describe('CampusCloudService security', () => {
       .rejects.toBeInstanceOf(NotFoundException);
   });
 
+  test('unified folders include only owner, group or public', async () => {
+    await cloud.folders(ownerViewer, 'all');
+    const select = query.mock.calls.find(([sql]) =>
+      String(sql).startsWith('SELECT * FROM campus_cloud_folders WHERE owner_key=?'));
+    expect(select).toBeDefined();
+    expect(select[0]).toContain("visibility='public'");
+    expect(select[0]).toContain("visibility='group'");
+    expect(select[1]).toEqual([owner, 'А-03-23']);
+  });
+
+  test('renaming a folder leaves its file access and share links unchanged', async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_cloud_folders')) {
+        return [{
+          id: 7, owner_key: owner, name: 'Старое',
+          visibility: 'private', group_code: null,
+        }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return { insertId: 8, affectedRows: 1 };
+    });
+    const result = await cloud.updateFolder(ownerViewer, 7, {
+      name: 'Физика',
+    });
+    expect(result.name).toBe('Физика');
+    expect(result.visibility).toBe('private');
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('UPDATE campus_cloud_folders'))).toBe(true);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('UPDATE campus_cloud_files'))).toBe(false);
+  });
+
+  test('changing folder sharing updates file ACLs', async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_cloud_folders')) {
+        return [{
+          id: 7, owner_key: owner, name: 'Физика',
+          visibility: 'private', group_code: null,
+        }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return { insertId: 8, affectedRows: 1 };
+    });
+    const result = await cloud.updateFolder(ownerViewer, 7, {
+      visibility: 'group',
+    });
+    expect(result.name).toBe('Физика');
+    expect(result.visibility).toBe('group');
+    expect(query.mock.calls.some(([sql, params]) =>
+      String(sql).startsWith(
+        'UPDATE campus_cloud_files SET visibility=?,group_code=?,share_hash=NULL',
+      ) && params[0] === 'group' && params[1] === 'А-03-23')).toBe(true);
+  });
+
   test('search query uses server-side ACL constraints', async () => {
     await cloud.list(ownerViewer, { mode: 'discover', q: 'ЛР' });
     const select = query.mock.calls.find(([sql]) =>
