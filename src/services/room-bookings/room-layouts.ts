@@ -12,6 +12,7 @@ export type RoomSeatPosition = {
   width: number;
   height: number;
   rotation?: number;
+  label?: string;
 };
 export type RoomElement = {
   id: string;
@@ -79,6 +80,7 @@ export function makeInitialRoomLayouts(): RoomLayout[] {
           row, desk, seat,
           x: x + (seat - 1) * 31,
           y, width: 27, height: 33,
+          label: `Ряд ${row}, парта ${desk}, ${seat === 1 ? 'левое' : 'правое'} место`,
         });
       }
       standard.elements.push({
@@ -150,6 +152,7 @@ export function makeInitialRoomLayouts(): RoomLayout[] {
           row,
           desk: side === 1 ? count - i : i + 1,
           seat: side,
+          label: `Ряд ${11 - row}, ${side === 1 ? 'левая' : 'правая'} сторона, место ${side === 1 ? count - i : i + 1}`,
           x: start + i * 30,
           y: top + arcOffset(i, count),
           width: 27,
