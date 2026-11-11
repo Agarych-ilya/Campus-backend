@@ -151,7 +151,25 @@ export class CampusCloudService {
 
   async folders(viewer: CloudViewer, mode = 'mine') {
     await this.ensure();
-    const own = mode !== 'discover';
+    if (mode === 'all') {
+      const owner = this.owner(viewer);
+      const rows = await this.db.query(
+        "SELECT * FROM campus_cloud_folders WHERE owner_key=? " +
+        "OR visibility='public' " +
+        "OR (visibility='group' AND group_code=?) " +
+        'ORDER BY id DESC LIMIT 150',
+        [owner, viewer.group ?? ''],
+      ) as FolderRow[];
+      return rows.map(row => ({
+        id: Number(row.id), name: row.name,
+        visibility: row.visibility, group: row.group_code,
+        mine: row.owner_key === owner,
+      }));
+    }
+    if (mode !== 'mine' && mode !== 'discover') {
+      throw new BadRequestException('Неверный каталог папок');
+    }
+    const own = mode === 'mine';
     if (own) {
       const owner = this.owner(viewer);
       const rows = await this.db.query(
@@ -217,11 +235,21 @@ export class CampusCloudService {
       if (mode !== 'mine' && !this.canRead(folder, viewer)) {
         throw new NotFoundException('Папка недоступна');
       }
-      conditions.push(mode === 'mine' ?
-        'COALESCE(IF(f.owner_key=?, f.folder_id, s.folder_id),0)=?' :
-        'f.folder_id=?');
-      if (mode === 'mine') params.push(owner);
-      params.push(folderId);
+      if (mode === 'mine') {
+        conditions.push(
+          'COALESCE(IF(f.owner_key=?, f.folder_id, s.folder_id),0)=?',
+        );
+        params.push(owner, folderId);
+      } else if (folder.owner_key === viewer.key) {
+        // The user's folder can also contain bookmarks of accessible files.
+        conditions.push(
+          '(f.folder_id=? OR (s.owner_key IS NOT NULL AND s.folder_id=?))',
+        );
+        params.push(folderId, folderId);
+      } else {
+        conditions.push('f.folder_id=?');
+        params.push(folderId);
+      }
     }
     const rows = await this.db.query(
       'SELECT f.*, IF(s.owner_key IS NULL,0,1) AS saved_by_me, ' +
@@ -269,11 +297,15 @@ export class CampusCloudService {
       'UPDATE campus_cloud_folders SET name=?,visibility=?,group_code=? WHERE id=?',
       [name, visibility, group, id],
     );
-    await this.db.query(
-      'UPDATE campus_cloud_files SET visibility=?,group_code=?,share_hash=NULL ' +
-      'WHERE owner_key=? AND folder_id=?',
-      [visibility, group, viewer.key, id],
-    );
+    // Renaming never revokes links or modifies file visibility.
+    // Only an actual ACL change propagates to the folder's files.
+    if (visibility !== folder.visibility || group !== folder.group_code) {
+      await this.db.query(
+        'UPDATE campus_cloud_files SET visibility=?,group_code=?,share_hash=NULL ' +
+        'WHERE owner_key=? AND folder_id=?',
+        [visibility, group, viewer.key, id],
+      );
+    }
     return { id, name, visibility, group };
   }
 
