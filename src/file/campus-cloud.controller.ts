@@ -55,6 +55,77 @@ export class CampusCloudController {
     return this.service.folders(this.viewer(req), mode, query);
   }
 
+  private shareUrl(token: string, kind: 'file' | 'folder'): string | null {
+    const configured = process.env.CAMPUS_PUBLIC_URL?.trim().replace(/\/$/, '');
+    if (!configured) return null;
+    try {
+      const uri = new URL(configured);
+      if (uri.protocol !== 'https:' || uri.username || uri.password ||
+          uri.pathname !== '/' || uri.search || uri.hash) {
+        return null;
+      }
+      return uri.origin + '/cloud/' + (kind === 'folder' ? 'f/' : 's/') + token;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @Post('folders/:id/link')
+  @UseGuards(ListingsOwnerGuard)
+  async folderLink(@Req() req: any,
+    @Param('id', ParseIntPipe) id: number) {
+    const result = await this.service.createFolderLink(this.viewer(req), id);
+    return { ...result, url: this.shareUrl(result.token, 'folder') };
+  }
+
+  @Delete('folders/:id/link')
+  @UseGuards(ListingsOwnerGuard)
+  revokeFolderLink(@Req() req: any,
+    @Param('id', ParseIntPipe) id: number) {
+    return this.service.revokeFolderLink(this.viewer(req), id);
+  }
+
+  @Get('f/:token')
+  async sharedFolder(@Param('token') token: string, @Res() res: Response) {
+    const data = await this.service.listSharedFolder(token);
+    // No scripts, and all uploaded filenames are HTML-escaped to prevent XSS.
+    const esc = (value: string) => value.replace(/[&<>"']/g, ch => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;',
+      '"': '&quot;', "'": '&#39;',
+    }[ch] ?? ch));
+    const rows = data.files.map(file =>
+      '<li><a href="/cloud/f/' + token + '/files/' + file.id + '">' +
+      esc(file.name) + '</a> <small>(' +
+      Math.round(file.size / 1024) + ' КБ)</small></li>',
+    ).join('');
+    res.set({
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+      'Content-Security-Policy':
+        "default-src 'none'; base-uri 'none'; form-action 'none'; " +
+        "style-src 'unsafe-inline'; sandbox allow-downloads",
+    });
+    return res.send(
+      '<!doctype html><html lang="ru"><meta charset="utf-8">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+      '<title>' + esc(data.name) + ' — Cloud Campus</title>' +
+      '<body style="font:16px system-ui;max-width:700px;margin:32px auto;' +
+      'padding:12px;background:#151515;color:#eee">' +
+      '<h1>' + esc(data.name) + '</h1>' +
+      '<p>Файлы из общей папки Cloud Campus</p><ul>' + rows + '</ul>' +
+      '</body></html>',
+    );
+  }
+
+  @Get('f/:token/files/:id')
+  async sharedFolderFile(@Param('token') token: string,
+    @Param('id', ParseIntPipe) id: number, @Res() res: Response) {
+    const file = await this.service.readSharedFolderFile(token, id);
+    return this.download(res, file);
+  }
+
   @Post('folders')
   @UseGuards(ListingsOwnerGuard)
   createFolder(@Req() req: any, @Body() dto: any) {
@@ -134,6 +205,13 @@ export class CampusCloudController {
     return this.service.unsave(this.viewer(req), id);
   }
 
+  @Patch('files/:id/name')
+  @UseGuards(ListingsOwnerGuard)
+  renameFile(@Req() req: any, @Param('id', ParseIntPipe) id: number,
+    @Body() dto: any) {
+    return this.service.renameFile(this.viewer(req), id, dto);
+  }
+
   @Patch('files/:id/move')
   @UseGuards(ListingsOwnerGuard)
   move(@Req() req: any, @Param('id', ParseIntPipe) id: number,
@@ -152,20 +230,7 @@ export class CampusCloudController {
   @UseGuards(ListingsOwnerGuard)
   async link(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
     const result = await this.service.createLink(this.viewer(req), id);
-    // Only an operator-configured HTTPS public origin can be shared remotely.
-    const configured = process.env.CAMPUS_PUBLIC_URL?.trim().replace(/\/$/, '');
-    let publicUrl: string | null = null;
-    if (configured) {
-      try {
-        const origin = new URL(configured);
-        if (origin.protocol === 'https:' && !origin.username &&
-            !origin.password && origin.pathname === '/' &&
-            !origin.search && !origin.hash) {
-          publicUrl = origin.origin + '/cloud/s/' + result.token;
-        }
-      } catch (_) {}
-    }
-    return { ...result, url: publicUrl };
+    return { ...result, url: this.shareUrl(result.token, 'file') };
   }
 
   @Delete('files/:id/link')
