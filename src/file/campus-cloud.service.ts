@@ -161,11 +161,10 @@ export class CampusCloudService {
       const filter = q
         ? ' AND LOWER(name) LIKE ?'
         : '';
-      if (q) params.push('%' + q.toLowerCase()
-        .replace(/[%_\\]/g, '\\  async folders(viewer: CloudViewer, mode = 'mine') {
-    await this.ensure();
-    if (mode === 'all') {
-      const owner = this.owner(viewer);
+      if (q) {
+        const escaped = q.toLowerCase().replace(/[\\%_]/g, '\\$&');
+        params.push('%' + escaped + '%');
+      }
       const rows = await this.db.query(
         "SELECT * FROM campus_cloud_folders WHERE owner_key=? " +
         "OR visibility='public' " +
