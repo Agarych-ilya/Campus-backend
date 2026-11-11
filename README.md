@@ -206,6 +206,24 @@ curl.exe "http://127.0.0.1:8000/services/room-bookings/rooms/%D0%92-308/layout"
 Полный формат JSON, правила изменения, API и безопасность:
 [docs/room-layouts.md](docs/room-layouts.md).
 
+### Cloud Campus — личные файлы и материалы группы
+
+Добавлено облако с папками и доступом `private/group/public`, поиском,
+сохранением общих материалов в личную библиотеку, превью PNG/JPG/WebP/GIF
+и отзываемыми ссылками на скачивание. Данные о владельцах и доступе хранятся
+в MySQL. Старые незащищённые маршруты `/file` отключены.
+
+Для постоянного хранения файлов настрой диск/volume:
+
+```dotenv
+CAMPUS_CLOUD_STORAGE_DIR=D:/CampusStorage/cloud-private
+# Публичный HTTPS-адрес backend нужен для рабочих ссылок студентам:
+CAMPUS_PUBLIC_URL=https://api.example-campus.ru
+```
+
+Полное описание ACL, маршрутов и безопасной миграции старых файлов —
+[docs/cloud-campus.md](docs/cloud-campus.md).
+
 <a id="авторизация-и-безопасность"></a>
 ## 🔐 Авторизация и безопасность
 
