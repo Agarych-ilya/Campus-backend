@@ -393,7 +393,7 @@ export class CampusCloudService {
       const group = folder
         ? visibility === 'group' ? this.group(viewer) : null : file.group_code;
       await this.db.query(
-        'UPDATE campus_cloud_files SET folder_id=?,visibility=?,group_code=? ' +
+        'UPDATE campus_cloud_files SET folder_id=?,visibility=?,group_code=?,share_hash=NULL ' +
         'WHERE id=? AND owner_key=?',
         [folderId, visibility, group, id, owner],
       );
