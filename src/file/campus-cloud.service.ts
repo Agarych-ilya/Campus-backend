@@ -60,6 +60,12 @@ export class CampusCloudService {
           ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
         );
         await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_cloud_folder_links (' +
+          'folder_id BIGINT UNSIGNED NOT NULL PRIMARY KEY, ' +
+          'share_hash CHAR(64) NOT NULL UNIQUE' +
+          ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
+        await this.db.query(
           'CREATE TABLE IF NOT EXISTS campus_cloud_saved (' +
           'owner_key CHAR(64) NOT NULL, file_id BIGINT UNSIGNED NOT NULL, ' +
           'folder_id BIGINT UNSIGNED NULL, ' +
@@ -238,6 +244,15 @@ export class CampusCloudService {
       conditions.push('LOWER(f.name) LIKE ?');
       params.push('%' + q.toLowerCase().replace(/[%_\\]/g, '\\$&') + '%');
     }
+    // In the default root view show folders rather than flattening their files.
+    // A saved foreign file without a personal folder is a root-level bookmark.
+    if (!q && mode === 'search' &&
+        (query.folderId === undefined || query.folderId === '')) {
+      conditions.push(
+        '(f.folder_id IS NULL OR ' +
+        '(s.owner_key IS NOT NULL AND s.folder_id IS NULL))',
+      );
+    }
     if (query.folderId !== undefined && query.folderId !== '') {
       const folderId = this.id(query.folderId);
       const folder = await this.folderRow(folderId);
@@ -335,6 +350,9 @@ export class CampusCloudService {
     await this.db.query(
       'UPDATE campus_cloud_saved SET folder_id=NULL WHERE folder_id=? AND owner_key=?',
       [id, viewer.key],
+    );
+    await this.db.query(
+      'DELETE FROM campus_cloud_folder_links WHERE folder_id=?', [id],
     );
     await this.db.query('DELETE FROM campus_cloud_folders WHERE id=?', [id]);
     return { deleted: true };
@@ -471,6 +489,95 @@ export class CampusCloudService {
       );
     }
     return { moved: true };
+  }
+
+  async renameFile(viewer: CloudViewer, id: number, body: any) {
+    const owner = this.owner(viewer);
+    const file = await this.fileRow(id);
+    if (file.owner_key !== owner) {
+      throw new ForbiddenException('Переименовать файл может только владелец');
+    }
+    const nextName = this.name(body?.name);
+    const ext = (name: string) => {
+      const index = name.lastIndexOf('.');
+      return index < 0 ? '' : name.slice(index).toLowerCase();
+    };
+    if (ext(file.name) !== ext(nextName)) {
+      throw new BadRequestException('Расширение файла менять нельзя');
+    }
+    await this.db.query(
+      'UPDATE campus_cloud_files SET name=? WHERE id=? AND owner_key=?',
+      [nextName, id, owner],
+    );
+    return { id, name: nextName };
+  }
+
+  async createFolderLink(viewer: CloudViewer, rawId: number) {
+    const folder = await this.folderRow(rawId);
+    if (folder.owner_key !== this.owner(viewer)) {
+      throw new ForbiddenException('Ссылку создаёт только владелец папки');
+    }
+    const token = randomBytes(32).toString('base64url');
+    await this.db.query(
+      'INSERT INTO campus_cloud_folder_links (folder_id,share_hash) ' +
+      'VALUES (?,?) ON DUPLICATE KEY UPDATE share_hash=VALUES(share_hash)',
+      [rawId, this.hash(token)],
+    );
+    return { token };
+  }
+
+  async revokeFolderLink(viewer: CloudViewer, rawId: number) {
+    const folder = await this.folderRow(rawId);
+    if (folder.owner_key !== this.owner(viewer)) {
+      throw new ForbiddenException('Отозвать ссылку может только владелец');
+    }
+    await this.db.query(
+      'DELETE FROM campus_cloud_folder_links WHERE folder_id=?', [rawId],
+    );
+    return { revoked: true };
+  }
+
+  private async sharedFolder(token: string): Promise<FolderRow> {
+    if (!/^[A-Za-z0-9_-]{35,80}$/.test(token)) {
+      throw new NotFoundException('Ссылка на папку недействительна');
+    }
+    await this.ensure();
+    const rows = await this.db.query(
+      'SELECT f.* FROM campus_cloud_folders f ' +
+      'JOIN campus_cloud_folder_links l ON l.folder_id=f.id ' +
+      'WHERE l.share_hash=? LIMIT 1', [this.hash(token)],
+    ) as FolderRow[];
+    if (!rows.length) {
+      throw new NotFoundException('Ссылка на папку отозвана');
+    }
+    return rows[0];
+  }
+
+  async listSharedFolder(token: string) {
+    const folder = await this.sharedFolder(token);
+    const files = await this.db.query(
+      'SELECT id,name,size_bytes FROM campus_cloud_files ' +
+      'WHERE folder_id=? AND owner_key=? ORDER BY name LIMIT 500',
+      [folder.id, folder.owner_key],
+    ) as Array<{ id: number; name: string; size_bytes: number }>;
+    return {
+      name: folder.name,
+      files: files.map(item => ({
+        id: Number(item.id),
+        name: item.name,
+        size: Number(item.size_bytes),
+      })),
+    };
+  }
+
+  async readSharedFolderFile(token: string, rawId: number) {
+    const folder = await this.sharedFolder(token);
+    const file = await this.fileRow(rawId);
+    if (file.folder_id !== Number(folder.id) ||
+        file.owner_key !== folder.owner_key) {
+      throw new NotFoundException('Файл отсутствует в этой папке');
+    }
+    return this.diskFile(file);
   }
 
   async changeVisibility(viewer: CloudViewer, id: number, body: any) {
