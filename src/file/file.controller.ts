@@ -7,6 +7,7 @@ import {
   UploadedFile,
   UseInterceptors,
   Res,
+  GoneException,
 } from '@nestjs/common';
 
 import { FileService } from './file.service';
@@ -36,15 +37,17 @@ export class FileController {
       }),
     }),
   )
-  async uploadFile(
-    @UploadedFile() file: Express.Multer.File,
-  ) {
-    return this.fileService.postFile(file);
+  async uploadFile(@UploadedFile() file: Express.Multer.File) {
+    if (file?.path) {
+      const fs = await import('node:fs/promises');
+      await fs.unlink(file.path).catch(() => undefined);
+    }
+    throw new GoneException('Обнови CampusApp: загружай файлы через /cloud/upload');
   }
 
   @Get()
   async getFiles() {
-    return this.fileService.getFiles();
+    throw new GoneException('Старый каталог без авторизации отключён. Используй /cloud/files');
   }
 
   @Get(':id/download')
@@ -52,18 +55,13 @@ export class FileController {
     @Param('id') id: string,
     @Res() res: Response,
   ) {
-    const file = await this.fileService.getFile(id);
-
-    return res.download(
-      file.path,
-      file.name,
-    );
+    throw new GoneException('Старое публичное скачивание отключено. Используй /cloud/files');
   }
 
   @Delete(':id')
   async deleteFile(
     @Param('id') id: string,
   ) {
-    return this.fileService.deleteFile(id);
+    throw new GoneException('Старое удаление без проверки владельца отключено');
   }
 }
