@@ -86,6 +86,78 @@ describe('CampusCloudService security', () => {
       params[0] !== token && params[0].length === 64)).toBe(true);
   });
 
+  test('only owner can rename the actual file, not another student', async () => {
+    await expect(cloud.renameFile(otherViewer, 10, {
+      name: 'Лабораторная.pdf',
+    })).rejects.toBeInstanceOf(ForbiddenException);
+    const result = await cloud.renameFile(ownerViewer, 10, {
+      name: 'Лабораторная.pdf',
+    });
+    expect(result.name).toBe('Лабораторная.pdf');
+    expect(query.mock.calls.some(([sql, params]) =>
+      String(sql).startsWith('UPDATE campus_cloud_files SET name=?') &&
+      params[0] === 'Лабораторная.pdf' && params[2] === owner)).toBe(true);
+    await expect(cloud.renameFile(ownerViewer, 10, {
+      name: 'fake.exe',
+    })).rejects.toThrow('Расширение');
+  });
+
+  test('folder links are owner-only, revocable, and scoped to owned files',
+      async () => {
+    query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.startsWith('SELECT * FROM campus_cloud_folders')) {
+        return [{ id: 7, owner_key: owner, name: 'Физика',
+          visibility: 'private', group_code: null }];
+      }
+      if (sql.startsWith('SELECT f.* FROM campus_cloud_folders')) {
+        return [{ id: 7, owner_key: owner, name: 'Физика',
+          visibility: 'private', group_code: null }];
+      }
+      if (sql.startsWith('SELECT id,name,size_bytes FROM')) {
+        return [{ id: 10, name: 'Конспект.pdf', size_bytes: 400 }];
+      }
+      if (sql.startsWith('SELECT * FROM campus_cloud_files')) {
+        return [{ ...sample, folder_id: 7 }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return { affectedRows: 1 };
+    });
+
+    await expect(cloud.createFolderLink(otherViewer, 7))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    const link = await cloud.createFolderLink(ownerViewer, 7);
+    expect(link.token.length).toBeGreaterThan(35);
+    const result = await cloud.listSharedFolder(link.token);
+    expect(result.name).toBe('Физика');
+    expect(result.files).toEqual([{
+      id: 10, name: 'Конспект.pdf', size: 400,
+    }]);
+    expect(query.mock.calls.some(([sql, params]) =>
+      String(sql).startsWith('INSERT INTO campus_cloud_folder_links') &&
+      params[0] === 7 && params[1] !== link.token &&
+      typeof params[1] === 'string' && params[1].length === 64)).toBe(true);
+
+    await expect(cloud.readSharedFolderFile(link.token, 12))
+      .rejects.toBeInstanceOf(NotFoundException);
+    await cloud.revokeFolderLink(ownerViewer, 7);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('DELETE FROM campus_cloud_folder_links'))).toBe(true);
+  });
+
+  test('root view does not flatten files that belong in folders', async () => {
+    await cloud.list(ownerViewer, { mode: 'search' });
+    const select = query.mock.calls.find(([sql]) =>
+      String(sql).startsWith('SELECT f.*'));
+    expect(select[0]).toContain('f.folder_id IS NULL');
+    expect(select[0]).toContain('s.folder_id IS NULL');
+
+    query.mockClear();
+    await cloud.list(ownerViewer, { mode: 'search', q: 'ТАУ' });
+    const searchSelect = query.mock.calls.find(([sql]) =>
+      String(sql).startsWith('SELECT f.*'));
+    expect(searchSelect[0]).not.toContain('f.folder_id IS NULL');
+  });
+
   test('share links reject invalid and revoked tokens', async () => {
     await expect(cloud.readLink('guess'))
       .rejects.toBeInstanceOf(NotFoundException);
