@@ -1,67 +1,31 @@
 import {
-  Controller,
-  Get,
-  Post,
-  Param,
-  Delete,
-  UploadedFile,
-  UseInterceptors,
-  Res,
-  GoneException,
+  Controller, Delete, Get, GoneException, Param, Post,
 } from '@nestjs/common';
 
-import { FileService } from './file.service';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
-import type { Response } from 'express';
-
+/**
+ * Old /file routes never had ownership checks. Refuse them BEFORE parsing
+ * multipart bodies, rather than silently exposing legacy students' files.
+ * The authenticated replacement lives at /cloud.
+ */
 @Controller('file')
 export class FileController {
-  constructor(private readonly fileService: FileService) { }
-
   @Post('upload')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: './cloud',
-
-        filename: (req, file, callback) => {
-          const extension = extname(file.originalname);
-
-          const filename =
-            `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`;
-
-          callback(null, filename);
-        },
-      }),
-    }),
-  )
-  async uploadFile(@UploadedFile() file: Express.Multer.File) {
-    if (file?.path) {
-      const fs = await import('node:fs/promises');
-      await fs.unlink(file.path).catch(() => undefined);
-    }
-    throw new GoneException('Обнови CampusApp: загружай файлы через /cloud/upload');
+  uploadFile() {
+    throw new GoneException('Обнови CampusApp: загрузка теперь через /cloud/upload');
   }
 
   @Get()
-  async getFiles() {
-    throw new GoneException('Старый каталог без авторизации отключён. Используй /cloud/files');
+  getFiles() {
+    throw new GoneException('Старый общий каталог отключён. Используй /cloud/files');
   }
 
   @Get(':id/download')
-  async downloadFile(
-    @Param('id') id: string,
-    @Res() res: Response,
-  ) {
-    throw new GoneException('Старое публичное скачивание отключено. Используй /cloud/files');
+  downloadFile(@Param('id') _id: string) {
+    throw new GoneException('Старое публичное скачивание отключено');
   }
 
   @Delete(':id')
-  async deleteFile(
-    @Param('id') id: string,
-  ) {
+  deleteFile(@Param('id') _id: string) {
     throw new GoneException('Старое удаление без проверки владельца отключено');
   }
 }
