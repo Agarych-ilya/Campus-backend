@@ -54,6 +54,7 @@ GET    /cloud/files?mode=search&q=конспект
 GET    /cloud/files?mode=mine&folderId=12
 GET    /cloud/folders?mode=mine
 GET    /cloud/folders?mode=discover
+GET    /cloud/folders?mode=all         # свои + публичные + своей группы
 
 POST   /cloud/folders
 PATCH  /cloud/folders/:id
