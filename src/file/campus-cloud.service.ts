@@ -158,7 +158,7 @@ export class CampusCloudService {
   // Limits are enforced on upload and folder creation, not just in the UI.
   static readonly MAX_FILE_BYTES = 20 * 1024 * 1024;
   static readonly MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-  static readonly MAX_STORAGE_BYTES = 512 * 1024 * 1024;
+  static readonly MAX_STORAGE_BYTES = 500 * 1024 * 1024;
   static readonly MAX_FILES = 500;
   static readonly MAX_FOLDERS = 100;
 
@@ -571,7 +571,7 @@ export class CampusCloudService {
       if (Number(usage[0]?.count ?? 0) >= CampusCloudService.MAX_FILES ||
           Number(usage[0]?.bytes ?? 0) + uploaded.size >
             CampusCloudService.MAX_STORAGE_BYTES) {
-        throw new BadRequestException('Лимит облака: 500 файлов или 512 МБ');
+        throw new BadRequestException('Лимит облака: 500 файлов или 500 МБ');
       }
       const name = this.name(uploaded.originalname);
       const folderId = await this.ownedFolder(body?.folderId, viewer);
