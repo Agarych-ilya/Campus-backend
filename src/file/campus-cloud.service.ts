@@ -564,6 +564,11 @@ export class CampusCloudService {
           'WHERE owner_key=? AND folder_id=?',
           [visibility, group, viewer.key, id],
         );
+        if (visibility === 'private') {
+          await connection.execute(
+            'DELETE FROM campus_cloud_folder_links WHERE folder_id=?', [id],
+          );
+        }
       });
     } else if (name !== folder.name) {
       await this.db.query(
@@ -763,6 +768,9 @@ export class CampusCloudService {
     if (folder.owner_key !== this.owner(viewer)) {
       throw new ForbiddenException('Ссылку создаёт только владелец папки');
     }
+    if (folder.visibility === 'private') {
+      throw new ForbiddenException('Личная папка не доступна по ссылке');
+    }
     const token = randomBytes(32).toString('base64url');
     await this.db.query(
       'INSERT INTO campus_cloud_folder_links (folder_id,share_hash) ' +
@@ -852,6 +860,9 @@ export class CampusCloudService {
     const file = await this.fileRow(id);
     if (file.owner_key !== owner) {
       throw new ForbiddenException('Ссылку создаёт только владелец файла');
+    }
+    if (file.visibility === 'private') {
+      throw new ForbiddenException('Личный файл не доступен по ссылке');
     }
     const token = randomBytes(32).toString('base64url');
     await this.db.query(
