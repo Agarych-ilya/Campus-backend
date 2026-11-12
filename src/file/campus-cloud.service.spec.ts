@@ -26,7 +26,14 @@ describe('CampusCloudService security', () => {
       if (sql.startsWith('SELECT')) return [];
       return { insertId: 8, affectedRows: 1 };
     });
-    cloud = new CampusCloudService({ query } as unknown as DbService);
+    const withTransaction = jest.fn(async (operation) => operation({
+      execute: async (sql: string, params: unknown[]) => [
+        await query(sql, params), [],
+      ],
+    }));
+    cloud = new CampusCloudService({
+      query, withTransaction,
+    } as unknown as DbService);
   });
 
   test('folders require verified BARS identity', async () => {
@@ -45,6 +52,28 @@ describe('CampusCloudService security', () => {
     expect(query.mock.calls.some(([sql, params]) =>
       String(sql).startsWith('INSERT INTO campus_cloud_folders') &&
       params[3] === 'А-03-23')).toBe(true);
+  });
+
+  test('Cyrillic filenames survive Latin-1 multipart decoding and NFC', () => {
+    const decode = (cloud as any).uploadName.bind(cloud);
+    const russian = 'Лабораторная работа №2 — график.pdf';
+    expect(decode(russian)).toBe(russian);
+    expect(decode(Buffer.from(russian, 'utf8').toString('latin1')))
+      .toBe(russian);
+    expect(decode('Отчёт_МЭИ_2026.docx')).toBe('Отчёт_МЭИ_2026.docx');
+  });
+
+  test('a file inside a folder inherits folder permissions', async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_cloud_files')) {
+        return [{ ...sample, folder_id: 7 }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return { affectedRows: 1 };
+    });
+    await expect(cloud.changeVisibility(ownerViewer, 10, {
+      visibility: 'public',
+    })).rejects.toThrow('Меняй доступ для всей папки');
   });
 
   test('strangers cannot download a private file', async () => {
