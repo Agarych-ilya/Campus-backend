@@ -107,6 +107,15 @@ describe('CampusCloudService security', () => {
     })).rejects.toBeInstanceOf(ForbiddenException);
     await expect(cloud.createLink(otherViewer, 10))
       .rejects.toBeInstanceOf(ForbiddenException);
+    await expect(cloud.createLink(ownerViewer, 10))
+      .rejects.toThrow('Личный файл');
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_cloud_files')) {
+        return [{ ...sample, visibility: 'public' }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return { affectedRows: 1 };
+    });
     const { token } = await cloud.createLink(ownerViewer, 10);
     expect(token.length).toBeGreaterThan(35);
     expect(query.mock.calls.some(([sql, params]) =>
@@ -136,11 +145,11 @@ describe('CampusCloudService security', () => {
     query.mockImplementation(async (sql: string, params: unknown[]) => {
       if (sql.startsWith('SELECT * FROM campus_cloud_folders')) {
         return [{ id: 7, owner_key: owner, name: 'Физика',
-          visibility: 'private', group_code: null }];
+          visibility: 'public', group_code: null }];
       }
       if (sql.startsWith('SELECT f.* FROM campus_cloud_folders')) {
         return [{ id: 7, owner_key: owner, name: 'Физика',
-          visibility: 'private', group_code: null }];
+          visibility: 'public', group_code: null }];
       }
       if (sql.startsWith('SELECT id,name,size_bytes FROM')) {
         return [{ id: 10, name: 'Конспект.pdf', size_bytes: 400 }];
