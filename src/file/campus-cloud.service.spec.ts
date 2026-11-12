@@ -260,6 +260,60 @@ describe('CampusCloudService security', () => {
       ) && params[0] === 'group' && params[1] === 'А-03-23')).toBe(true);
   });
 
+  test('folder access updates every owned child in a single transaction',
+      async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_cloud_folders')) {
+        return [{
+          id: 7, owner_key: owner, name: 'Лабораторные',
+          visibility: 'private', group_code: null,
+        }];
+      }
+      if (sql.startsWith('SELECT COUNT(*) AS total FROM campus_cloud_saved')) {
+        return [{ total: 0 }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return { affectedRows: 2 };
+    });
+    await cloud.updateFolder(ownerViewer, 7, {
+      visibility: 'public',
+    });
+    const queries = query.mock.calls.map(([sql]) => String(sql));
+    expect(queries.some(sql => sql.startsWith(
+      'UPDATE campus_cloud_folders SET name=?,visibility=?,group_code=?'
+    ))).toBe(true);
+    expect(queries.some(sql => sql.startsWith(
+      'UPDATE campus_cloud_files SET visibility=?,group_code=?,share_hash=NULL'
+    ))).toBe(true);
+    const filesUpdate = query.mock.calls.find(([sql]) =>
+      String(sql).startsWith(
+        'UPDATE campus_cloud_files SET visibility=?,group_code=?,share_hash=NULL'
+      ));
+    expect(filesUpdate[1]).toEqual(['public', null, owner, 7]);
+  });
+
+  test('folder cannot override permissions on someone else\'s bookmark',
+      async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_cloud_folders')) {
+        return [{
+          id: 7, owner_key: owner, name: 'Лабораторные',
+          visibility: 'private', group_code: null,
+        }];
+      }
+      if (sql.startsWith('SELECT COUNT(*) AS total FROM campus_cloud_saved')) {
+        return [{ total: 1 }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return { affectedRows: 1 };
+    });
+    await expect(cloud.updateFolder(ownerViewer, 7, {
+      visibility: 'public',
+    })).rejects.toThrow('сохранённые чужие материалы');
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('UPDATE campus_cloud_files'))).toBe(false);
+  });
+
   test('unified file listing includes own, group and public materials', async () => {
     await cloud.list(ownerViewer, { mode: 'search' });
     const select = query.mock.calls.find(([sql]) =>
