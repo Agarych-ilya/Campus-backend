@@ -13,6 +13,7 @@ export class DbService implements OnModuleDestroy {
       user: this.configService.get<string>('DB_USER', 'root'),
       password: this.configService.get<string>('DB_PASSWORD', ''),
       database: this.configService.get<string>('DB_NAME', 'campus'),
+      charset: 'utf8mb4',
 
       waitForConnections: true,
       connectionLimit: 10,
