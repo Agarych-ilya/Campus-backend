@@ -801,7 +801,7 @@ export class CampusCloudService {
       'JOIN campus_cloud_folder_links l ON l.folder_id=f.id ' +
       'WHERE l.share_hash=? LIMIT 1', [this.hash(token)],
     ) as FolderRow[];
-    if (!rows.length) {
+    if (!rows.length || rows[0].visibility === 'private') {
       throw new NotFoundException('Ссылка на папку отозвана');
     }
     return rows[0];
@@ -895,7 +895,9 @@ export class CampusCloudService {
       'SELECT * FROM campus_cloud_files WHERE share_hash=? LIMIT 1',
       [this.hash(token)],
     ) as FileRow[];
-    if (!rows.length) throw new NotFoundException('Ссылка недействительна');
+    if (!rows.length || rows[0].visibility === 'private') {
+      throw new NotFoundException('Ссылка недействительна');
+    }
     return this.diskFile(rows[0]);
   }
 
