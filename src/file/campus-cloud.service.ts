@@ -89,13 +89,29 @@ export class CampusCloudService {
     return viewer.group;
   }
   private name(value: unknown): string {
-    const text = String(value ?? '').trim();
+    const text = String(value ?? '').normalize('NFC').trim();
     if (!text || text.length > 160 || /[\x00-\x1f\x7f/\\]/.test(text) ||
         text === '.' || text === '..') {
       throw new BadRequestException('Некорректное название');
     }
     return text;
   }
+  /** Multer/Busboy can decode multipart filename bytes as Latin-1.
+   * Restore UTF-8 Cyrillic without corrupting names already decoded by a
+   * client that supplies the correct Unicode filename.
+   */
+  private uploadName(raw: string): string {
+    if (!raw) throw new BadRequestException('Файл без имени');
+    let decoded = raw;
+    if (/[ÐÑÃÂ]/.test(raw)) {
+      const restored = Buffer.from(raw, 'latin1').toString('utf8');
+      if (!restored.includes('\uFFFD') && restored !== raw) {
+        decoded = restored;
+      }
+    }
+    return this.name(decoded);
+  }
+
   private scope(value: unknown): CloudScope {
     if (value !== 'private' && value !== 'group' && value !== 'public') {
       throw new BadRequestException('Выбери уровень доступа');
@@ -518,18 +534,25 @@ export class CampusCloudService {
       ? this.scope(body.visibility) : folder.visibility;
     const group = visibility === 'group' ? this.group(viewer) : null;
     const name = body?.name === undefined ? folder.name : this.name(body.name);
-    // Updating a shared folder also updates ALL its owned files.
-    await this.db.query(
-      'UPDATE campus_cloud_folders SET name=?,visibility=?,group_code=? WHERE id=?',
-      [name, visibility, group, id],
-    );
-    // Renaming never revokes links or modifies file visibility.
-    // Only an actual ACL change propagates to the folder's files.
+    // Folder ACL and ALL owned child file ACLs change in one transaction.
+    // A partial DB failure must never leave private files shared or vice versa.
     if (visibility !== folder.visibility || group !== folder.group_code) {
+      await this.db.withTransaction(async connection => {
+        await connection.execute(
+          'UPDATE campus_cloud_folders SET name=?,visibility=?,group_code=? ' +
+          'WHERE id=? AND owner_key=?',
+          [name, visibility, group, id, viewer.key],
+        );
+        await connection.execute(
+          'UPDATE campus_cloud_files SET visibility=?,group_code=?,share_hash=NULL ' +
+          'WHERE owner_key=? AND folder_id=?',
+          [visibility, group, viewer.key, id],
+        );
+      });
+    } else if (name !== folder.name) {
       await this.db.query(
-        'UPDATE campus_cloud_files SET visibility=?,group_code=?,share_hash=NULL ' +
-        'WHERE owner_key=? AND folder_id=?',
-        [visibility, group, viewer.key, id],
+        'UPDATE campus_cloud_folders SET name=? WHERE id=? AND owner_key=?',
+        [name, id, viewer.key],
       );
     }
     return { id, name, visibility, group };
@@ -573,7 +596,7 @@ export class CampusCloudService {
             CampusCloudService.MAX_STORAGE_BYTES) {
         throw new BadRequestException('Лимит облака: 500 файлов или 500 МБ');
       }
-      const name = this.name(uploaded.originalname);
+      const name = this.uploadName(uploaded.originalname);
       const folderId = await this.ownedFolder(body?.folderId, viewer);
       const folder = folderId ? await this.folderRow(folderId) : null;
       const visibility = folder ? folder.visibility
@@ -786,6 +809,11 @@ export class CampusCloudService {
       throw new ForbiddenException('Нельзя менять доступ к чужому файлу');
     }
     const visibility = this.scope(body?.visibility);
+    if (file.folder_id != null) {
+      throw new BadRequestException(
+        'Файл находится в папке. Меняй доступ для всей папки',
+      );
+    }
     const group = visibility === 'group' ? this.group(viewer) : null;
     // A visibility change invalidates any previously distributed secret link.
     await this.db.query(
