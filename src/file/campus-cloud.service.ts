@@ -165,16 +165,20 @@ export class CampusCloudService {
   async quota(viewer: CloudViewer) {
     const owner = this.owner(viewer);
     await this.ensure();
-    const [files, folders] = await Promise.all([
+    const [fileRows, folderRows] = await Promise.all([
       this.db.query(
         'SELECT COUNT(*) AS count,COALESCE(SUM(size_bytes),0) AS bytes ' +
         'FROM campus_cloud_files WHERE owner_key=?', [owner],
-      ) as Promise<Array<{ count: number | string; bytes: number | string }>>,
+      ),
       this.db.query(
         'SELECT COUNT(*) AS count FROM campus_cloud_folders WHERE owner_key=?',
         [owner],
-      ) as Promise<Array<{ count: number | string }>>,
+      ),
     ]);
+    const files = fileRows as Array<{
+      count: number | string; bytes: number | string;
+    }>;
+    const folders = folderRows as Array<{ count: number | string }>;
     return {
       usedBytes: Number(files[0]?.bytes ?? 0),
       usedFiles: Number(files[0]?.count ?? 0),
