@@ -155,6 +155,40 @@ export class CampusCloudService {
     };
   }
 
+  // Limits are enforced on upload and folder creation, not just in the UI.
+  static readonly MAX_FILE_BYTES = 20 * 1024 * 1024;
+  static readonly MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  static readonly MAX_STORAGE_BYTES = 512 * 1024 * 1024;
+  static readonly MAX_FILES = 500;
+  static readonly MAX_FOLDERS = 100;
+
+  async quota(viewer: CloudViewer) {
+    const owner = this.owner(viewer);
+    await this.ensure();
+    const [files, folders] = await Promise.all([
+      this.db.query(
+        'SELECT COUNT(*) AS count,COALESCE(SUM(size_bytes),0) AS bytes ' +
+        'FROM campus_cloud_files WHERE owner_key=?', [owner],
+      ) as Promise<Array<{ count: number | string; bytes: number | string }>>,
+      this.db.query(
+        'SELECT COUNT(*) AS count FROM campus_cloud_folders WHERE owner_key=?',
+        [owner],
+      ) as Promise<Array<{ count: number | string }>>,
+    ]);
+    return {
+      usedBytes: Number(files[0]?.bytes ?? 0),
+      usedFiles: Number(files[0]?.count ?? 0),
+      usedFolders: Number(folders[0]?.count ?? 0),
+      limits: {
+        fileBytes: CampusCloudService.MAX_FILE_BYTES,
+        imageBytes: CampusCloudService.MAX_IMAGE_BYTES,
+        totalBytes: CampusCloudService.MAX_STORAGE_BYTES,
+        files: CampusCloudService.MAX_FILES,
+        folders: CampusCloudService.MAX_FOLDERS,
+      },
+    };
+  }
+
   async folders(viewer: CloudViewer, mode = 'mine', rawQuery = '') {
     await this.ensure();
     const q = String(rawQuery).trim();
@@ -299,7 +333,7 @@ export class CampusCloudService {
       'SELECT COUNT(*) AS count FROM campus_cloud_folders WHERE owner_key=?',
       [owner],
     ) as Array<{ count: number }>;
-    if (Number(existing[0]?.count ?? 0) >= 100) {
+    if (Number(existing[0]?.count ?? 0) >= CampusCloudService.MAX_FOLDERS) {
       throw new BadRequestException('Не больше 100 папок на пользователя');
     }
     const result = await this.db.query(
@@ -522,7 +556,7 @@ export class CampusCloudService {
   async upload(viewer: CloudViewer, uploaded: Express.Multer.File, body: any) {
     try {
       await this.ensure();
-      if (!uploaded || !uploaded.size || uploaded.size > 20 * 1024 * 1024) {
+      if (!uploaded || !uploaded.size || uploaded.size > CampusCloudService.MAX_FILE_BYTES) {
         throw new BadRequestException('Файл должен быть не больше 20 МБ');
       }
       const owner = this.owner(viewer);
@@ -530,9 +564,9 @@ export class CampusCloudService {
         'SELECT COUNT(*) AS count,COALESCE(SUM(size_bytes),0) AS bytes ' +
         'FROM campus_cloud_files WHERE owner_key=?', [owner],
       ) as Array<{ count: number; bytes: number }>;
-      if (Number(usage[0]?.count ?? 0) >= 500 ||
+      if (Number(usage[0]?.count ?? 0) >= CampusCloudService.MAX_FILES ||
           Number(usage[0]?.bytes ?? 0) + uploaded.size >
-            512 * 1024 * 1024) {
+            CampusCloudService.MAX_STORAGE_BYTES) {
         throw new BadRequestException('Лимит облака: 500 файлов или 512 МБ');
       }
       const name = this.name(uploaded.originalname);
@@ -542,7 +576,7 @@ export class CampusCloudService {
         : this.scope(body?.visibility ?? 'private');
       const group = visibility === 'group' ? this.group(viewer) : null;
       const mime = this.sniffMime(await fs.readFile(uploaded.path), uploaded.mimetype);
-      if (mime.startsWith('image/') && uploaded.size > 5 * 1024 * 1024) {
+      if (mime.startsWith('image/') && uploaded.size > CampusCloudService.MAX_IMAGE_BYTES) {
         throw new BadRequestException('Изображения — максимум 5 МБ');
       }
       const result = await this.db.query(
