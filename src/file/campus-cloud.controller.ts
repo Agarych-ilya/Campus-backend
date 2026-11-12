@@ -42,6 +42,11 @@ export class CampusCloudController {
     } : {};
   }
 
+  @Get('quota')
+  quota(@Req() req: any) {
+    return this.service.quota(this.viewer(req));
+  }
+
   @Get('files')
   list(@Req() req: any, @Query() query: {
     mode?: string; q?: string; folderId?: string;
@@ -162,7 +167,9 @@ export class CampusCloudController {
   @UseGuards(ListingsOwnerGuard)
   @UseInterceptors(FileInterceptor('file', {
     storage,
-    limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 5 },
+    limits: {
+      fileSize: CampusCloudService.MAX_FILE_BYTES, files: 1, fields: 5,
+    },
   }))
   upload(@Req() req: any, @UploadedFile() file: Express.Multer.File,
     @Body() dto: any) {
