@@ -538,6 +538,22 @@ export class CampusCloudService {
     // A partial DB failure must never leave private files shared or vice versa.
     if (visibility !== folder.visibility || group !== folder.group_code) {
       await this.db.withTransaction(async connection => {
+        if (visibility !== 'private') {
+          // Saved foreign bookmarks belong to their original authors. A
+          // folder's owner cannot override those file permissions.
+          const [linkedResult] = await connection.execute(
+            'SELECT COUNT(*) AS total FROM campus_cloud_saved ' +
+            'WHERE owner_key=? AND folder_id=?',
+            [viewer.key, id],
+          );
+          const linkedRows = linkedResult as Array<{ total: number | string }>;
+          if (Number(linkedRows[0]?.total ?? 0) > 0) {
+            throw new BadRequestException(
+              'В папке есть сохранённые чужие материалы. ' +
+              'Убери их из папки перед изменением доступа',
+            );
+          }
+        }
         await connection.execute(
           'UPDATE campus_cloud_folders SET name=?,visibility=?,group_code=? ' +
           'WHERE id=? AND owner_key=?',
@@ -698,6 +714,14 @@ export class CampusCloudService {
         [folderId, visibility, group, id, owner],
       );
     } else {
+      if (folderId != null) {
+        const target = await this.folderRow(folderId);
+        if (target.visibility !== 'private') {
+          throw new BadRequestException(
+            'Чужие сохранённые файлы нельзя перемещать в общую папку',
+          );
+        }
+      }
       const saved = await this.db.query(
         'SELECT file_id FROM campus_cloud_saved ' +
         'WHERE file_id=? AND owner_key=? LIMIT 1', [id, owner],
