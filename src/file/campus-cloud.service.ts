@@ -527,7 +527,8 @@ export class CampusCloudService {
 
   async updateFolder(viewer: CloudViewer, id: number, body: any) {
     const folder = await this.folderRow(id);
-    if (folder.owner_key !== this.owner(viewer)) {
+    const owner = this.owner(viewer);
+    if (folder.owner_key !== owner) {
       throw new ForbiddenException('Чужая папка');
     }
     const visibility = body?.visibility !== undefined
@@ -544,7 +545,7 @@ export class CampusCloudService {
           const [linkedResult] = await connection.execute(
             'SELECT COUNT(*) AS total FROM campus_cloud_saved ' +
             'WHERE owner_key=? AND folder_id=?',
-            [viewer.key, id],
+            [owner, id],
           );
           const linkedRows = linkedResult as Array<{ total: number | string }>;
           if (Number(linkedRows[0]?.total ?? 0) > 0) {
@@ -557,12 +558,12 @@ export class CampusCloudService {
         await connection.execute(
           'UPDATE campus_cloud_folders SET name=?,visibility=?,group_code=? ' +
           'WHERE id=? AND owner_key=?',
-          [name, visibility, group, id, viewer.key],
+          [name, visibility, group, id, owner],
         );
         await connection.execute(
           'UPDATE campus_cloud_files SET visibility=?,group_code=?,share_hash=NULL ' +
           'WHERE owner_key=? AND folder_id=?',
-          [visibility, group, viewer.key, id],
+          [visibility, group, owner, id],
         );
         if (visibility === 'private') {
           await connection.execute(
@@ -573,7 +574,7 @@ export class CampusCloudService {
     } else if (name !== folder.name) {
       await this.db.query(
         'UPDATE campus_cloud_folders SET name=? WHERE id=? AND owner_key=?',
-        [name, id, viewer.key],
+        [name, id, owner],
       );
     }
     return { id, name, visibility, group };
