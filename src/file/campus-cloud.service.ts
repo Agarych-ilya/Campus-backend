@@ -337,7 +337,11 @@ export class CampusCloudService {
       's.folder_id AS saved_folder_id FROM campus_cloud_files f ' +
       'LEFT JOIN campus_cloud_saved s ON s.file_id=f.id AND s.owner_key=? ' +
       'WHERE ' + conditions.join(' AND ') +
-      ' ORDER BY f.id DESC LIMIT 150',
+      // Folder transfers need a complete catalogue to avoid re-uploading
+      // previously stored content that fell off the first result page.
+      (query.folderId !== undefined && query.folderId !== ''
+        ? ' ORDER BY f.id DESC LIMIT 1000'
+        : ' ORDER BY f.id DESC LIMIT 150'),
       params,
     ) as FileRow[];
     return rows.map(row => this.present(row, viewer));
