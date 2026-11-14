@@ -87,8 +87,10 @@ export class AttendanceService {
   }
 
   private date(raw: string): string {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) ||
-        new Date(raw + 'T00:00:00Z').toISOString().slice(0, 10) !== raw) {
+    const match = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+    const parsed = match ? new Date(raw + 'T00:00:00Z') : null;
+    if (!parsed || Number.isNaN(parsed.getTime()) ||
+        parsed.toISOString().slice(0, 10) !== raw) {
       throw new BadRequestException('Некорректная дата занятия');
     }
     return raw;
@@ -176,12 +178,12 @@ export class AttendanceService {
       [actor.group, date, time, subject, type, room, actor.ownerKey],
     );
     const rows = await this.db.query(
-      'SELECT id FROM campus_attendance_lessons ' +
+      'SELECT id,state FROM campus_attendance_lessons ' +
       'WHERE group_name=? AND lesson_date=? AND lesson_time=? ' +
       'AND subject=? LIMIT 1',
       [actor.group, date, time, subject],
-    ) as Array<{ id: number | string }>;
-    return { id: Number(rows[0].id), state: 'open' };
+    ) as Array<{ id: number | string; state: 'open' | 'closed' }>;
+    return { id: Number(rows[0].id), state: rows[0].state };
   }
 
   private async lesson(actor: AttendanceIdentity, id: number): Promise<LessonRow> {
