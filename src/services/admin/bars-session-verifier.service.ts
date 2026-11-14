@@ -1,6 +1,7 @@
 import {
   Injectable,
   Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import axios from 'axios';
@@ -26,39 +27,63 @@ export class BarsSessionVerifier {
   private readonly logger = new Logger(BarsSessionVerifier.name);
 
   private async fetchBars(path: string, cookies: string): Promise<string> {
+    // Only call the two fixed BARS origins/paths. Never follow redirects:
+    // a login redirect must not forward session cookies elsewhere.
+    const stage = path.startsWith('/bars_web/ST/Student/ListStudent')
+      ? 'student-list'
+      : path.startsWith('/bars_web/ST_Study/Main/Main')
+        ? 'study-profile'
+        : 'student-profile';
     try {
       const response = await axios.get<string>(this.origin + path, {
         headers: {
           Cookie: cookies,
           Accept: 'text/html',
+          'Accept-Language': 'ru-RU,ru;q=0.9',
+          'User-Agent': 'Mozilla/5.0 CampusApp BARS session verification',
+          Referer: this.origin + '/bars_web/Auth/Menu',
         },
         responseType: 'text',
-        timeout: 8500,
+        timeout: 9000,
         maxRedirects: 0,
         maxContentLength: 750 * 1024,
         validateStatus: (status) => status === 200,
       });
       if (typeof response.data !== 'string') {
-        throw new Error('Unexpected BARS response');
+        throw new Error('Invalid BARS response body');
       }
       return response.data;
     } catch (error) {
-      // Log only a fixed endpoint label and numeric HTTP status.
-      // Never log cookies, full URLs, BARS HTML, or student identifiers.
-      const stage = path.startsWith('/bars_web/ST/Student/ListStudent')
-        ? 'student-list'
-        : path.startsWith('/bars_web/ST_Study/Main/Main')
-          ? 'study-profile'
-          : 'student-profile';
-      const status = axios.isAxiosError(error)
-        ? error.response?.status
-        : undefined;
+      // Never log cookies, redirects, full URLs, HTML, student IDs or books.
+      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+      const rawCode = axios.isAxiosError(error) ? error.code : undefined;
+      const code = typeof rawCode === 'string' && /^[A-Z_]{2,40}$/.test(rawCode)
+        ? rawCode : 'unknown';
       this.logger.warn(
-        'BARS admin verification: request-failed stage=' + stage +
-        ' status=' + (typeof status === 'number' ? status : 'network-or-format'),
+        'BARS verification: request-failed stage=' + stage +
+        ' status=' + (typeof status === 'number' ? status : 'none') +
+        ' code=' + code,
       );
+      if (status === 301 || status === 302 || status === 303 ||
+          status === 307 || status === 308 || status === 401 ||
+          status === 403) {
+        throw new UnauthorizedException(
+          'БАРС отклонил сессию или перенаправил на вход. ' +
+          'Повторно войди в БАРС через CampusApp.',
+        );
+      }
+      if (status === 429 || (typeof status === 'number' && status >= 500) ||
+          status === undefined) {
+        throw new ServiceUnavailableException(
+          'Не удалось связаться с БАРС для проверки сессии' +
+          (typeof status === 'number' ? ' (HTTP ' + status + ')' : '') +
+          '. Это может быть временная ошибка сети или сервера БАРС. ' +
+          'Повтори проверку позже.',
+        );
+      }
       throw new UnauthorizedException(
-        'Не удалось проверить сессию БАРС. Войди в БАРС ещё раз.',
+        'БАРС не подтвердил сессию (HTTP ' + status + '). ' +
+        'Проверь авторизацию в CampusApp.',
       );
     }
   }
