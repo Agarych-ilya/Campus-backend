@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import {
   BadRequestException, ConflictException, ForbiddenException,
   Injectable, NotFoundException,
@@ -8,6 +9,7 @@ import { normalizedStudyGroup } from '../lesson-notes/lesson-group-normalizer';
 import { AttendanceIdentity } from './attendance.guard';
 import {
   AttendanceOpenLessonDto, AttendanceDecisionDto,
+  AttendanceRosterImportDto, AttendanceAbsencesDto,
 } from './attendance.dto';
 
 type LessonRow = {
@@ -63,6 +65,34 @@ export class AttendanceService {
           'PRIMARY KEY(lesson_id,owner_key)' +
           ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
         );
+        // Imported BARS roster is separate from legacy self-registered
+        // students. Never claim a client-imported roster is server-verified.
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_attendance_roster (' +
+          'group_name VARCHAR(60) NOT NULL, owner_key CHAR(64) NOT NULL, ' +
+          'display_name VARCHAR(120) NOT NULL, active TINYINT(1) NOT NULL, ' +
+          'updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ' +
+          'ON UPDATE CURRENT_TIMESTAMP, ' +
+          'PRIMARY KEY(group_name,owner_key), ' +
+          'INDEX idx_att_roster_active(group_name,active)' +
+          ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_attendance_lesson_roster (' +
+          'lesson_id BIGINT UNSIGNED NOT NULL, owner_key CHAR(64) NOT NULL, ' +
+          'display_name VARCHAR(120) NOT NULL, ' +
+          'PRIMARY KEY(lesson_id,owner_key)' +
+          ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_attendance_roster_sync (' +
+          'id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, ' +
+          'group_name VARCHAR(60) NOT NULL, actor_key CHAR(64) NOT NULL, ' +
+          'student_count SMALLINT UNSIGNED NOT NULL, ' +
+          'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, ' +
+          'INDEX idx_att_sync(group_name,id)' +
+          ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
         await this.db.query(
           'CREATE TABLE IF NOT EXISTS campus_attendance_audit (' +
           'id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, ' +
@@ -98,6 +128,182 @@ export class AttendanceService {
 
   private clean(text: string) {
     return text.normalize('NFC').replace(/\s+/g, ' ').trim();
+  }
+
+  /** Full class roster is private to an authenticated starosta. */
+  async roster(actor: AttendanceIdentity) {
+    this.starosta(actor);
+    await this.ensureSchema();
+    const students = await this.db.query(
+      'SELECT owner_key, display_name FROM campus_attendance_roster ' +
+      'WHERE group_name=? AND active=1 ORDER BY display_name LIMIT 121',
+      [actor.group],
+    ) as MemberRow[];
+    const syncRows = await this.db.query(
+      'SELECT created_at, student_count FROM campus_attendance_roster_sync ' +
+      'WHERE group_name=? ORDER BY id DESC LIMIT 1',
+      [actor.group],
+    ) as Array<{ created_at: Date|string; student_count: number }>;
+    return {
+      group: actor.group,
+      students: students.map(row => ({
+        ownerKey: row.owner_key, displayName: row.display_name,
+      })),
+      imported: syncRows.length > 0,
+      importedAt: syncRows[0]?.created_at ?? null,
+      // Data was captured from BARS WebView by the starosta; the server
+      // has not independently certified the roster against BARS.
+      verification: 'starosta_reviewed_bars_page',
+    };
+  }
+
+  async importRoster(actor: AttendanceIdentity, dto: AttendanceRosterImportDto) {
+    this.starosta(actor);
+    await this.ensureSchema();
+    if (normalizedStudyGroup(dto.group) !== actor.group) {
+      throw new ForbiddenException('Список относится к другой учебной группе');
+    }
+    const secret = process.env.SESSION_SECRET;
+    if (!secret || secret.length < 32) {
+      throw new ConflictException('Не настроен SESSION_SECRET для импорта');
+    }
+    if (dto.students.length > 120) {
+      throw new BadRequestException('Слишком много студентов в списке');
+    }
+    const usedIds = new Set<string>();
+    const usedNames = new Set<string>();
+    const prepared = dto.students.map(student => {
+      const name = this.clean(student.fullName);
+      if (name.length < 5 || name.length > 120 ||
+          !/^[\\p{L} .'-]+$/u.test(name) ||
+          name.split(' ').filter(Boolean).length < 2) {
+        throw new BadRequestException('Некорректное ФИО в списке БАРС');
+      }
+      const canonical = name.toLocaleLowerCase('ru-RU');
+      if (usedNames.has(canonical)) {
+        throw new BadRequestException(
+          'Повторяющееся ФИО в группе. Проверь список студентов',
+        );
+      }
+      usedNames.add(canonical);
+      // Student row ID, when exposed by BARS, takes precedence; otherwise
+      // normalized full name is stable across repeated roster imports.
+      const source = student.sourceId?.trim() ?? '';
+      if (source && !/^[a-zA-Z0-9_-]{1,120}$/.test(source)) {
+        throw new BadRequestException('Некорректный идентификатор студента');
+      }
+      if (source && usedIds.has(source)) {
+        throw new BadRequestException('Дублирующийся ID студента');
+      }
+      if (source) usedIds.add(source);
+      const key = createHmac('sha256', secret)
+        .update('attendance-roster-v1:' + actor.group + ':' +
+          (source || 'fio:' + canonical)).digest('hex');
+      return { ownerKey: key, displayName: name };
+    });
+    const keys = new Set(prepared.map(x => x.ownerKey));
+    if (keys.size !== prepared.length) {
+      throw new BadRequestException('Невозможно различить студентов по списку');
+    }
+    await this.db.withTransaction(async connection => {
+      await connection.execute(
+        'UPDATE campus_attendance_roster SET active=0 WHERE group_name=?',
+        [actor.group],
+      );
+      for (const row of prepared) {
+        await connection.execute(
+          'INSERT INTO campus_attendance_roster ' +
+          '(group_name,owner_key,display_name,active) VALUES (?,?,?,1) ' +
+          'ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),active=1',
+          [actor.group, row.ownerKey, row.displayName],
+        );
+      }
+      await connection.execute(
+        'INSERT INTO campus_attendance_roster_sync ' +
+        '(group_name,actor_key,student_count) VALUES (?,?,?)',
+        [actor.group, actor.ownerKey, prepared.length],
+      );
+    });
+    return { group: actor.group, count: prepared.length, imported: true };
+  }
+
+  /**
+   * One reviewed decision: all checked-out students are absent, everyone
+   * else is explicitly confirmed present. Never infer absences from missing
+   * self-checkins; do not write into official BARS from this endpoint.
+   */
+  async saveAbsences(
+    actor: AttendanceIdentity, id: number, dto: AttendanceAbsencesDto,
+  ) {
+    this.starosta(actor);
+    await this.lesson(actor, id);
+    return this.db.withTransaction(async connection => {
+      await this.ensureOpenTransaction(connection, actor, id);
+      const [snapRows] = await connection.execute(
+        'SELECT owner_key,display_name FROM campus_attendance_lesson_roster ' +
+        'WHERE lesson_id=? ORDER BY owner_key',
+        [id],
+      );
+      const snapshot = snapRows as unknown as MemberRow[];
+      const [currentRows] = await connection.execute(
+        'SELECT owner_key,display_name FROM campus_attendance_roster ' +
+        'WHERE group_name=? AND active=1 ORDER BY owner_key',
+        [actor.group],
+      );
+      const current = currentRows as unknown as MemberRow[];
+      const rows = snapshot.length ? snapshot : current;
+      if (!rows.length || rows.length > 120) {
+        throw new ConflictException('Сначала загрузи полный список группы из БАРС');
+      }
+      const actual = rows.map(row => row.owner_key).sort();
+      const submitted = [...dto.rosterKeys].sort();
+      if (actual.length !== submitted.length ||
+          actual.some((key, i) => key !== submitted[i])) {
+        throw new ConflictException(
+          'Список студентов изменился. Обнови журнал и проверь отметки',
+        );
+      }
+      const missing = new Set(dto.absentKeys);
+      if (missing.size !== dto.absentKeys.length ||
+          dto.absentKeys.some(key => !actual.includes(key))) {
+        throw new BadRequestException('Выбраны студенты вне этой группы');
+      }
+      if (!snapshot.length) {
+        for (const row of rows) {
+          await connection.execute(
+            'INSERT INTO campus_attendance_lesson_roster ' +
+            '(lesson_id,owner_key,display_name) VALUES (?,?,?)',
+            [id, row.owner_key, row.display_name],
+          );
+        }
+      }
+      for (const row of rows) {
+        const status = missing.has(row.owner_key) ? 'absent' : 'present';
+        await connection.execute(
+          'INSERT INTO campus_attendance_entries ' +
+          '(lesson_id,owner_key,status,reviewer_key) VALUES (?,?,?,?) ' +
+          'ON DUPLICATE KEY UPDATE status=VALUES(status),' +
+          'reviewer_key=VALUES(reviewer_key),updated_at=CURRENT_TIMESTAMP',
+          [id, row.owner_key, status, actor.ownerKey],
+        );
+        await this.auditTransaction(
+          connection, id, actor.ownerKey, row.owner_key,
+          'review', null, status,
+        );
+      }
+      await connection.execute(
+        "UPDATE campus_attendance_lessons SET state='closed' " +
+        "WHERE id=? AND group_name=? AND state='open'",
+        [id, actor.group],
+      );
+      await this.auditTransaction(
+        connection, id, actor.ownerKey, null, 'close', 'open', 'closed',
+      );
+      return {
+        state: 'closed', absent: missing.size,
+        present: rows.length - missing.size, barsSynced: false,
+      };
+    });
   }
 
   async register(actor: AttendanceIdentity, displayName: string) {
@@ -200,9 +406,14 @@ export class AttendanceService {
 
   async detail(actor: AttendanceIdentity, id: number) {
     const lesson = await this.lesson(actor, id);
-    const members = await this.db.query(
-      'SELECT owner_key,display_name FROM campus_attendance_students ' +
-      'WHERE group_name=? ORDER BY display_name LIMIT 200',
+    const locked = await this.db.query(
+      'SELECT owner_key,display_name FROM campus_attendance_lesson_roster ' +
+      'WHERE lesson_id=? ORDER BY display_name',
+      [id],
+    ) as MemberRow[];
+    const members = locked.length ? locked : await this.db.query(
+      'SELECT owner_key,display_name FROM campus_attendance_roster ' +
+      'WHERE group_name=? AND active=1 ORDER BY display_name LIMIT 121',
       [actor.group],
     ) as MemberRow[];
     const entries = await this.db.query(
