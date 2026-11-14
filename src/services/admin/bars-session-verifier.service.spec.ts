@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { UnauthorizedException } from '@nestjs/common';
+import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { BarsSessionVerifier } from './bars-session-verifier.service';
 
 describe('BarsSessionVerifier', () => {
@@ -211,9 +211,34 @@ describe('BarsSessionVerifier', () => {
 
   it('rejects expired sessions that redirect to the login page', async () => {
     get.mockReset();
-    get.mockRejectedValueOnce(new Error('302 Found'));
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ERR_BAD_RESPONSE',
+      response: {status: 302},
+    });
     await expect(verifier.verify('ASP.NET_SessionId=expired'))
       .rejects.toBeInstanceOf(UnauthorizedException);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('distinguishes temporary BARS outage from an expired student session',
+      async () => {
+    get.mockReset();
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ERR_BAD_RESPONSE',
+      response: {status: 503},
+    });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a service error when the BARS host cannot be reached', async () => {
+    get.mockReset();
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ETIMEDOUT',
+    });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   it('refuses a public login page even when it responds with HTTP 200', async () => {
