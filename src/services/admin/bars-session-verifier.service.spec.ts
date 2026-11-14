@@ -28,6 +28,67 @@ describe('BarsSessionVerifier', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
+  const groupGuid = 'cb991316-11df-ed11-80d9-005056be401c';
+  const starostaMenu =
+    '<nav><a id="ddMessage"><span class="d-none d-md-inline">' +
+    'public\\OgarkovIA</span></a></nav>';
+  const groupsHtml =
+    '<a href="/bars_web/SG/StudyGroup/EditStudyGroup?sgID=' +
+    groupGuid + '">А-03-23</a>';
+  const starostaPage =
+    '<div class="row"><label>Староста</label>' +
+    '<div><input value="Огарков Илья Александрович (А-03-23)"></div></div>' +
+    '<table><tbody><tr>' +
+    '<td>public\\OgarkovIA</td><td>Огарков</td><td>Илья</td>' +
+    '<td>Александрович</td><td><a href="mailto:OgarkovIA@mpei.ru">' +
+    'Почта</a></td></tr></tbody></table>';
+
+  it('grants starosta status only when authenticated BARS account matches ' +
+     'the official group starosta field and responsible person', async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({status: 200, data: starostaMenu})
+      .mockResolvedValueOnce({status: 200, data: groupsHtml})
+      .mockResolvedValueOnce({status: 200, data: starostaPage});
+    await expect(verifier.verifyStarosta(
+      'ASP.NET_SessionId=abc123', 'А-03-23',
+    )).resolves.toBe(true);
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(get.mock.calls[2][0]).toBe(
+      'https://bars.mpei.ru/bars_web/SG/StudyGroup/EditStudyGroup?sgID=' +
+      groupGuid,
+    );
+  });
+
+  it('does not grant the role to a journal maintainer who is not starosta',
+      async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({status: 200, data: starostaMenu})
+      .mockResolvedValueOnce({status: 200, data: groupsHtml})
+      .mockResolvedValueOnce({
+        status: 200,
+        data: starostaPage.replace(
+          'value="Огарков Илья Александрович (А-03-23)"',
+          'value="Иванова Елена Петровна (А-03-23)"',
+        ),
+      });
+    await expect(verifier.verifyStarosta(
+      'ASP.NET_SessionId=abc123', 'А-03-23',
+    )).resolves.toBe(false);
+  });
+
+  it('does not grant the role from a forged student-supplied BARS group link',
+      async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({status: 200, data: starostaMenu})
+      .mockResolvedValueOnce({status: 200, data:
+        groupsHtml.replace('/bars_web/SG/StudyGroup/EditStudyGroup',
+          'https://another.example/SG/StudyGroup/EditStudyGroup')});
+    await expect(verifier.verifyStarosta(
+      'ASP.NET_SessionId=abc123', 'А-03-23',
+    )).resolves.toBe(false);
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
   it('fetches protected BARS pages itself and verifies the same record book', async () => {
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
       .resolves.toEqual({ recordBook: '123456', group: 'А-03-23' });
