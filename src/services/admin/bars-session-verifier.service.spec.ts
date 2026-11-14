@@ -89,9 +89,19 @@ describe('BarsSessionVerifier', () => {
     expect(get).toHaveBeenCalledTimes(2);
   });
 
+  it('reads verified account login only from authenticated BARS menu', async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({status: 200, data: starostaMenu});
+    await expect(verifier.verifyAccountLogin('ASP.NET_SessionId=abc123'))
+      .resolves.toBe('petrovps');
+    expect(get.mock.calls[0][0]).toBe(
+      'https://bars.mpei.ru/bars_web/Auth/Menu',
+    );
+  });
+
   it('fetches protected BARS pages itself and verifies the same record book', async () => {
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-      .resolves.toEqual({ recordBook: '123456', group: 'А-03-23' });
+      .resolves.toMatchObject({ recordBook: '123456', group: 'А-03-23' });
 
     expect(get).toHaveBeenCalledTimes(2);
     const [url, options] = get.mock.calls[0];
@@ -128,7 +138,7 @@ describe('BarsSessionVerifier', () => {
       get.mockResolvedValueOnce({ status: 200, data: studentPage });
 
       await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-        .resolves.toEqual({ recordBook: '123456', group: 'А-03-23' });
+        .resolves.toMatchObject({ recordBook: '123456', group: 'А-03-23' });
       expect(get.mock.calls[1][0]).toBe(expectedUrl);
     },
   );
@@ -147,7 +157,7 @@ describe('BarsSessionVerifier', () => {
         '<span class="fw-bold">А-03-23</span></div></div>',
     });
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-      .resolves.toEqual({ recordBook: '123456', group: 'А-03-23' });
+      .resolves.toMatchObject({ recordBook: '123456', group: 'А-03-23' });
     expect(get.mock.calls[1][0]).toBe(
       'https://bars.mpei.ru/bars_web/ST_Study/Main/Main?studentID=' + id,
     );
@@ -162,7 +172,7 @@ describe('BarsSessionVerifier', () => {
     get.mockResolvedValueOnce({ status: 200, data: html });
     get.mockResolvedValueOnce({ status: 200, data: studentPage });
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-      .resolves.toEqual({ recordBook: '123456', group: 'А-03-23' });
+      .resolves.toMatchObject({ recordBook: '123456', group: 'А-03-23' });
     expect(get).toHaveBeenCalledTimes(2);
   });
 
@@ -176,7 +186,7 @@ describe('BarsSessionVerifier', () => {
         '<span class="fw-bold">А-09-23</span></div>',
     });
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-      .resolves.toEqual({recordBook: '123456', group: undefined});
+      .resolves.toMatchObject({recordBook: '123456', group: undefined});
   });
 
   it('never trusts an unrecognized group format for notes', async () => {
@@ -185,7 +195,7 @@ describe('BarsSessionVerifier', () => {
       data: studentList.replace('<td>А-03-23</td>', '<td>Неизвестно</td>')});
     get.mockResolvedValueOnce({status: 200, data: studentPage});
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-      .resolves.toEqual({recordBook: '123456', group: undefined});
+      .resolves.toMatchObject({recordBook: '123456', group: undefined});
   });
 
   it('rejects multiple profile links referring to different students', async () => {
