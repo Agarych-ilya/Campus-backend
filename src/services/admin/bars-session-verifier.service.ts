@@ -67,9 +67,17 @@ export class BarsSessionVerifier {
       if (status === 301 || status === 302 || status === 303 ||
           status === 307 || status === 308 || status === 401 ||
           status === 403) {
+        // Safe troubleshooting details (no redirect URL or credentials).
+        // A redirect could be a site change, not necessarily an expired
+        // login, so never assert that the student's password was rejected.
+        const stageName = stage === 'student-list'
+          ? 'список студентов'
+          : 'профиль студента';
         throw new UnauthorizedException(
-          'БАРС отклонил сессию или перенаправил на вход. ' +
-          'Повторно войди в БАРС через CampusApp.',
+          'БАРС не подтвердил сессию (' + stageName +
+          ', HTTP ' + status + '). Открой «Обновить вход в БАРС» ' +
+          'в учебном журнале. Если ошибка повторится, передай только ' +
+          'этап проверки и HTTP-код.',
         );
       }
       if (status === 429 || (typeof status === 'number' && status >= 500) ||
