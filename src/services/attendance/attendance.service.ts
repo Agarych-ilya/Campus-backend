@@ -7,6 +7,7 @@ import { DbService } from '../../db.service';
 import { ScheduleService } from '../../schedule/schedule.service';
 import { normalizedStudyGroup } from '../lesson-notes/lesson-group-normalizer';
 import { AttendanceIdentity } from './attendance.guard';
+import { rosterIdentityHash } from './attendance-identity';
 import {
   AttendanceOpenLessonDto, AttendanceDecisionDto,
   AttendanceRosterImportDto, AttendanceAbsencesDto,
@@ -75,6 +76,15 @@ export class AttendanceService {
           'ON UPDATE CURRENT_TIMESTAMP, ' +
           'PRIMARY KEY(group_name,owner_key), ' +
           'INDEX idx_att_roster_active(group_name,active)' +
+          ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_attendance_roster_accounts (' +
+          'group_name VARCHAR(60) NOT NULL, owner_key CHAR(64) NOT NULL, ' +
+          'source_hash CHAR(64) NULL, login_hash CHAR(64) NULL, ' +
+          'PRIMARY KEY(group_name,owner_key), ' +
+          'INDEX idx_roster_source(group_name,source_hash), ' +
+          'INDEX idx_roster_login(group_name,login_hash)' +
           ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
         );
         await this.db.query(
@@ -172,6 +182,7 @@ export class AttendanceService {
     }
     const usedIds = new Set<string>();
     const usedNames = new Set<string>();
+    const usedAccounts = new Set<string>();
     const prepared = dto.students.map(student => {
       const name = this.clean(student.fullName);
       if (name.length < 5 || name.length > 120 ||
@@ -199,7 +210,22 @@ export class AttendanceService {
       const key = createHmac('sha256', secret)
         .update('attendance-roster-v1:' + actor.group + ':' +
           (source || 'fio:' + canonical)).digest('hex');
-      return { ownerKey: key, displayName: name };
+      const email = student.email?.trim().toLowerCase() ?? '';
+      if (email && !/^[a-z][a-z0-9_.-]{2,63}@mpei\.ru$/.test(email)) {
+        throw new BadRequestException('Некорректная университетская почта');
+      }
+      const sourceHash = rosterIdentityHash(actor.group, 'student', source);
+      const loginHash = rosterIdentityHash(actor.group, 'login',
+        email ? email.slice(0, -'@mpei.ru'.length) : null);
+      for (const match of [sourceHash, loginHash]) {
+        if (match && usedAccounts.has(match)) {
+          throw new BadRequestException(
+            'У нескольких студентов совпадают идентификаторы БАРС',
+          );
+        }
+        if (match) usedAccounts.add(match);
+      }
+      return { ownerKey: key, displayName: name, sourceHash, loginHash };
     });
     const keys = new Set(prepared.map(x => x.ownerKey));
     if (keys.size !== prepared.length) {
@@ -210,12 +236,21 @@ export class AttendanceService {
         'UPDATE campus_attendance_roster SET active=0 WHERE group_name=?',
         [actor.group],
       );
+      await connection.execute(
+        'DELETE FROM campus_attendance_roster_accounts WHERE group_name=?',
+        [actor.group],
+      );
       for (const row of prepared) {
         await connection.execute(
           'INSERT INTO campus_attendance_roster ' +
           '(group_name,owner_key,display_name,active) VALUES (?,?,?,1) ' +
           'ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),active=1',
           [actor.group, row.ownerKey, row.displayName],
+        );
+        await connection.execute(
+          'INSERT INTO campus_attendance_roster_accounts ' +
+          '(group_name,owner_key,source_hash,login_hash) VALUES (?,?,?,?)',
+          [actor.group, row.ownerKey, row.sourceHash, row.loginHash],
         );
       }
       await connection.execute(
@@ -304,6 +339,56 @@ export class AttendanceService {
         present: rows.length - missing.size, barsSynced: false,
       };
     });
+  }
+
+  /** Resolve only the current authenticated student's BARS identity.
+   * Multiple matches fail closed to prevent displaying somebody else's N.
+   */
+  private async ownRosterKey(actor: AttendanceIdentity): Promise<string | null> {
+    if (!actor.rosterStudentHash && !actor.rosterLoginHash) return null;
+    const rows = await this.db.query(
+      'SELECT r.owner_key FROM campus_attendance_roster r ' +
+      'INNER JOIN campus_attendance_roster_accounts a ' +
+      'ON a.group_name=r.group_name AND a.owner_key=r.owner_key ' +
+      'WHERE r.group_name=? AND r.active=1 AND ' +
+      '((a.source_hash IS NOT NULL AND a.source_hash=?) OR ' +
+      '(a.login_hash IS NOT NULL AND a.login_hash=?)) LIMIT 3',
+      [actor.group, actor.rosterStudentHash ?? '',
+        actor.rosterLoginHash ?? ''],
+    ) as Array<{ owner_key: string }>;
+    return rows.length === 1 ? rows[0].owner_key : null;
+  }
+
+  async myAbsences(
+    actor: AttendanceIdentity, fromRaw: string, toRaw: string,
+  ) {
+    await this.ensureSchema();
+    const from = this.date(fromRaw);
+    const to = this.date(toRaw);
+    const days = (Date.parse(to + 'T00:00:00Z') -
+      Date.parse(from + 'T00:00:00Z')) / 86400000;
+    if (days < 0 || days > 42) {
+      throw new BadRequestException('Выбери период не больше 43 дней');
+    }
+    const mine = await this.ownRosterKey(actor);
+    if (!mine) return [];
+    const rows = await this.db.query(
+      'SELECT l.lesson_date,l.lesson_time,l.subject ' +
+      'FROM campus_attendance_lessons l ' +
+      'INNER JOIN campus_attendance_entries e ON e.lesson_id=l.id ' +
+      'INNER JOIN campus_attendance_lesson_roster s ' +
+      'ON s.lesson_id=l.id AND s.owner_key=e.owner_key ' +
+      "WHERE l.group_name=? AND l.state='closed' " +
+      "AND e.owner_key=? AND e.status='absent' " +
+      'AND l.lesson_date BETWEEN ? AND ? ORDER BY l.lesson_date,l.lesson_time',
+      [actor.group, mine, from, to],
+    ) as Array<{
+      lesson_date: string; lesson_time: string; subject: string;
+    }>;
+    return rows.map(row => ({
+      date: row.lesson_date, time: row.lesson_time,
+      subject: row.subject,
+    }));
   }
 
   async register(actor: AttendanceIdentity, displayName: string) {
@@ -427,7 +512,9 @@ export class AttendanceService {
       status: map.get(member.owner_key)?.status ?? 'unmarked',
       note: map.get(member.owner_key)?.note ?? null,
     }));
-    const mine = studentEntries.find(row => row.ownerKey === actor.ownerKey);
+    const ownKey = await this.ownRosterKey(actor);
+    const mine = studentEntries.find(row =>
+      row.ownerKey === ownKey || row.ownerKey === actor.ownerKey);
     return {
       id: Number(lesson.id), group: lesson.group_name,
       date: lesson.lesson_date, time: lesson.lesson_time,
