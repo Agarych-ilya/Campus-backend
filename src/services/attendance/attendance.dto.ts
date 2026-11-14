@@ -47,6 +47,10 @@ export class BarsRosterStudentDto {
   /** Opaque record ID from the current BARS student list, when available. */
   @IsOptional() @IsString() @MaxLength(120)
   sourceId?: string;
+
+  /** BARS student-table address; stored as one-way HMAC, never plaintext. */
+  @IsOptional() @IsString() @MaxLength(120)
+  email?: string;
 }
 
 export class AttendanceRosterImportDto {
