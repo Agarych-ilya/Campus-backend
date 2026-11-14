@@ -12,6 +12,7 @@ import { BarsRosterFetcher } from './bars-roster-fetcher.service';
 import {
   AttendanceOpenLessonDto, AttendanceDecisionDto,
   AttendanceRosterImportDto, AttendanceAbsencesDto,
+  AttendanceCorrectionDto,
 } from './attendance.dto';
 
 type LessonRow = {
@@ -375,6 +376,66 @@ export class AttendanceService {
         state: 'closed', absent: missing.size,
         present: rows.length - missing.size, barsSynced: false,
       };
+    });
+  }
+
+
+  /**
+   * Correct an accidental N after a journal was already saved.
+   * A separate endpoint avoids reopening the lesson or overwriting the
+   * remaining students. Lock the lesson and row; require the status that
+   * the starosta saw, so simultaneous changes cannot be lost silently.
+   * The previous and new marks are written to the audit trail.
+   */
+  async correctClosedAttendance(
+    actor: AttendanceIdentity, id: number, dto: AttendanceCorrectionDto,
+  ) {
+    this.starosta(actor);
+    await this.lesson(actor, id);
+    return this.db.withTransaction(async connection => {
+      const [lessonRows] = await connection.execute(
+        'SELECT state FROM campus_attendance_lessons ' +
+        'WHERE id=? AND group_name=? FOR UPDATE', [id, actor.group],
+      );
+      const state = lessonRows as unknown as Array<{state: string}>;
+      if (state.length !== 1 || state[0].state !== 'closed') {
+        throw new ConflictException(
+          'Исправлять отметки можно только в сохранённом журнале',
+        );
+      }
+      const [entryRows] = await connection.execute(
+        'SELECT e.status FROM campus_attendance_entries e ' +
+        'INNER JOIN campus_attendance_lesson_roster r ' +
+        'ON r.lesson_id=e.lesson_id AND r.owner_key=e.owner_key ' +
+        'WHERE e.lesson_id=? AND e.owner_key=? FOR UPDATE',
+        [id, dto.ownerKey],
+      );
+      const entries = entryRows as unknown as Array<{status: string}>;
+      if (entries.length !== 1 ||
+          !['present', 'absent'].includes(entries[0].status)) {
+        throw new ConflictException(
+          'Нет подтверждённой отметки этого студента в журнале',
+        );
+      }
+      const previous = entries[0].status;
+      if (previous !== dto.expectedStatus) {
+        throw new ConflictException(
+          'Отметка уже изменена. Обнови журнал перед исправлением',
+        );
+      }
+      if (previous === dto.status) {
+        return {status: previous, changed: false};
+      }
+      await connection.execute(
+        'UPDATE campus_attendance_entries SET status=?,reviewer_key=?,' +
+        'updated_at=CURRENT_TIMESTAMP WHERE lesson_id=? AND owner_key=?',
+        [dto.status, actor.ownerKey, id, dto.ownerKey],
+      );
+      await this.auditTransaction(
+        connection, id, actor.ownerKey, dto.ownerKey,
+        'correct', previous, dto.status,
+      );
+      return {status: dto.status, changed: true};
     });
   }
 

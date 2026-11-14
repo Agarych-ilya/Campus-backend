@@ -83,3 +83,17 @@ export class AttendanceCloseDto {
   @Matches(/^[a-f0-9]{64}$/, { each: true })
   acknowledgedStudentKeys!: string[];
 }
+
+/** Correct a previously saved closed lesson without reopening it.
+ * expectedStatus prevents silently overwriting another starosta's correction.
+ */
+export class AttendanceCorrectionDto {
+  @IsString() @Matches(/^[a-f0-9]{64}$/)
+  ownerKey!: string;
+
+  @IsIn(['present', 'absent'])
+  expectedStatus!: 'present' | 'absent';
+
+  @IsIn(['present', 'absent'])
+  status!: 'present' | 'absent';
+}

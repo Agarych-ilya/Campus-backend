@@ -239,6 +239,63 @@ describe('BARS attendance - verified group and review workflow', () => {
       String(sql).includes("SET state='closed'"))).toBe(true);
   });
 
+
+  test('starosta can remove saved N with an audited row-level correction',
+      async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_attendance_lessons')) {
+        return [{...lesson, state: 'closed'}];
+      }
+      if (sql.startsWith('SELECT state FROM campus_attendance_lessons')) {
+        return [{state: 'closed'}];
+      }
+      if (sql.startsWith('SELECT e.status FROM campus_attendance_entries e')) {
+        return [{status: 'absent'}];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const correction = {
+      ownerKey: classmate, expectedStatus: 'absent' as const,
+      status: 'present' as const,
+    };
+    await expect(api.correctClosedAttendance(student, 8, correction))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(await api.correctClosedAttendance(actor, 8, correction))
+      .toEqual({status: 'present', changed: true});
+    expect(query.mock.calls.some(([sql, params]) =>
+      String(sql).startsWith('UPDATE campus_attendance_entries SET status=') &&
+      params[0] === 'present' && params[2] === 8 &&
+      params[3] === classmate)).toBe(true);
+    expect(query.mock.calls.some(([sql, params]) =>
+      String(sql).startsWith('INSERT INTO campus_attendance_audit') &&
+      params[3] === 'correct' &&
+      params[4] === 'absent' && params[5] === 'present')).toBe(true);
+  });
+
+  test('closed journal correction rejects stale status and missing member',
+      async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_attendance_lessons'))
+        return [{...lesson, state: 'closed'}];
+      if (sql.startsWith('SELECT state FROM campus_attendance_lessons'))
+        return [{state: 'closed'}];
+      if (sql.startsWith('SELECT e.status FROM campus_attendance_entries e'))
+        return [{status: 'present'}];
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const stale = {
+      ownerKey: classmate, expectedStatus: 'absent' as const,
+      status: 'present' as const,
+    };
+    await expect(api.correctClosedAttendance(actor, 8, stale))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('UPDATE campus_attendance_entries SET status=')))
+      .toBe(false);
+  });
+
   test('stale or forged roster selection cannot save attendance',
       async () => {
     await expect(api.saveAbsences(actor, 8, {

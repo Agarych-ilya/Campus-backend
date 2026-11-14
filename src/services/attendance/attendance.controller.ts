@@ -14,6 +14,7 @@ import {
   AttendanceCloseDto, AttendanceDateDto, AttendanceDecisionDto,
   AttendanceMemberDto, AttendanceOpenLessonDto,
   AttendanceRosterImportDto, AttendanceAbsencesDto,
+  AttendanceCorrectionDto,
 } from './attendance.dto';
 
 const validate = new ValidationPipe({
@@ -87,6 +88,18 @@ export class AttendanceController {
     @Body() dto: AttendanceAbsencesDto,
   ) {
     return this.service.saveAbsences(req.attendanceIdentity, id, dto);
+  }
+
+  /** Correct a saved absence; only the verified starosta of this lesson's
+   * group can modify an existing record, with an audit trail.
+   */
+  @Patch('lessons/:id/attendance')
+  @UseGuards(AttendanceGuard) @UsePipes(validate)
+  correctAttendance(
+    @Req() req: any, @Param('id', ParseIntPipe) id: number,
+    @Body() dto: AttendanceCorrectionDto,
+  ) {
+    return this.service.correctClosedAttendance(req.attendanceIdentity, id, dto);
   }
 
   @Post('register')
