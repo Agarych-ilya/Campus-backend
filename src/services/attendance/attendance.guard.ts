@@ -28,7 +28,12 @@ export function attendanceIdentity(session: any): AttendanceIdentity | null {
   const ownerKey: string = session.listingOwnerKey;
   const allowlist = (process.env.CAMPUS_STAROSTA_GROUP_BOOKS ?? '')
     .split(';').map(x => x.trim()).filter(Boolean);
-  const isStarosta = allowlist.some(item => {
+  const checkedByBars =
+    typeof session.listingStarostaGroup === 'string' &&
+    normalizedStudyGroup(session.listingStarostaGroup) === group &&
+    Number.isFinite(session.listingStarostaVerifiedAt) &&
+    session.listingStarostaVerifiedAt === session.listingVerifiedAt;
+  const manuallyConfigured = allowlist.some(item => {
     const separator = item.indexOf('=');
     if (separator < 1) return false;
     const configuredGroup = normalizedStudyGroup(item.slice(0, separator));
@@ -38,7 +43,7 @@ export function attendanceIdentity(session: any): AttendanceIdentity | null {
     return timingSafeEqual(Buffer.from(key, 'hex'),
       Buffer.from(ownerKey, 'hex'));
   });
-  return { ownerKey, group, isStarosta };
+  return { ownerKey, group, isStarosta: checkedByBars || manuallyConfigured };
 }
 
 @Injectable()
