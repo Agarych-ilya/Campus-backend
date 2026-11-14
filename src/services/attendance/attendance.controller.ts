@@ -8,6 +8,7 @@ import { AttendanceService } from './attendance.service';
 import {
   AttendanceCloseDto, AttendanceDateDto, AttendanceDecisionDto,
   AttendanceMemberDto, AttendanceOpenLessonDto,
+  AttendanceRosterImportDto, AttendanceAbsencesDto,
 } from './attendance.dto';
 
 const validate = new ValidationPipe({
@@ -24,6 +25,27 @@ export class AttendanceController {
     const actor = attendanceIdentity(req.session);
     if (!actor) return { authenticated: false, isStarosta: false };
     return { authenticated: true, ...await this.service.me(actor) };
+  }
+
+  @Get('roster')
+  @UseGuards(AttendanceGuard)
+  roster(@Req() req: any) {
+    return this.service.roster(req.attendanceIdentity);
+  }
+
+  @Post('roster/import')
+  @UseGuards(AttendanceGuard) @UsePipes(validate)
+  importRoster(@Req() req: any, @Body() dto: AttendanceRosterImportDto) {
+    return this.service.importRoster(req.attendanceIdentity, dto);
+  }
+
+  @Post('lessons/:id/absences')
+  @UseGuards(AttendanceGuard) @UsePipes(validate)
+  saveAbsences(
+    @Req() req: any, @Param('id', ParseIntPipe) id: number,
+    @Body() dto: AttendanceAbsencesDto,
+  ) {
+    return this.service.saveAbsences(req.attendanceIdentity, id, dto);
   }
 
   @Post('register')
