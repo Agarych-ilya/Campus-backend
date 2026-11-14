@@ -100,6 +100,25 @@ describe('BARS attendance - verified group and review workflow', () => {
     expect(attendanceIdentity({...normal, listingOwnerKey: 'invalid'})).toBeNull();
   });
 
+  test('BARS-proven starosta can edit only their verified group', () => {
+    const key = ListingsService.ownerKey('123ABC');
+    const now = Date.now();
+    const session = {
+      listingOwnerKey: key,
+      listingGroup: 'А-03-23',
+      listingVerifiedAt: now,
+      listingStarostaGroup: 'А-03-23',
+      listingStarostaVerifiedAt: now,
+    };
+    expect(attendanceIdentity(session)?.isStarosta).toBe(true);
+    expect(attendanceIdentity({
+      ...session, listingStarostaGroup: 'А-02-23',
+    })?.isStarosta).toBe(false);
+    expect(attendanceIdentity({
+      ...session, listingStarostaVerifiedAt: now - 1000,
+    })?.isStarosta).toBe(false);
+  });
+
   test('cannot open journal for lesson not found in real RUZ timetable',
       async () => {
     await expect(api.open(actor, {
