@@ -10,6 +10,8 @@ export interface AttendanceIdentity {
   ownerKey: string;
   group: string;
   isStarosta: boolean;
+  rosterStudentHash?: string;
+  rosterLoginHash?: string;
 }
 
 const maxSessionAge = 24 * 60 * 60 * 1000;
@@ -43,7 +45,15 @@ export function attendanceIdentity(session: any): AttendanceIdentity | null {
     return timingSafeEqual(Buffer.from(key, 'hex'),
       Buffer.from(ownerKey, 'hex'));
   });
-  return { ownerKey, group, isStarosta: checkedByBars || manuallyConfigured };
+  const safeHash = (value: unknown): string | undefined =>
+    typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+      ? value : undefined;
+  return {
+    ownerKey, group,
+    isStarosta: checkedByBars || manuallyConfigured,
+    rosterStudentHash: safeHash(session.listingRosterStudentHash),
+    rosterLoginHash: safeHash(session.listingRosterLoginHash),
+  };
 }
 
 @Injectable()
