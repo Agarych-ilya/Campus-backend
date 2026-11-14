@@ -1,5 +1,6 @@
 import {
   ConflictException, Injectable, Logger, ServiceUnavailableException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
@@ -110,6 +111,25 @@ export function parseBarsStudents(html: string, group: string): {
 export class BarsRosterFetcher {
   private readonly logger = new Logger(BarsRosterFetcher.name);
 
+  private checkBrowserLocation(actual: string, expectedPath?: string): void {
+    let url: URL;
+    try {
+      url = new URL(actual);
+    } catch {
+      throw new UnauthorizedException('БАРС открыл неизвестную страницу');
+    }
+    if (url.origin !== ORIGIN) {
+      throw new UnauthorizedException('БАРС перенаправил запрос на другой сайт');
+    }
+    if (/\/(?:Auth|Account)\/(?:Login|LogOn|SignIn)(?:\/|$)/i
+        .test(url.pathname)) {
+      throw new UnauthorizedException('Сессия БАРС истекла: требуется вход');
+    }
+    if (expectedPath && url.pathname.replace(/\/+$/, '') !== expectedPath) {
+      throw new ConflictException('БАРС изменил адрес страницы учебной группы');
+    }
+  }
+
   async fetch(cookies: string, group: string): Promise<BarsRosterStudentDto[]> {
     if (!/^[А-ЯЁA-Z0-9]+(?:-[А-ЯЁA-Z0-9]+){1,3}$/.test(group)) {
       throw new ConflictException('Не подтверждена учебная группа');
@@ -135,6 +155,7 @@ export class BarsRosterFetcher {
       );
     }
     const context = await browser.newContext({serviceWorkers: 'block'});
+    let stage = 'browser-start';
     try {
       await context.addCookies(cookieEntries);
       await context.route('**/*', route => {
@@ -152,7 +173,9 @@ export class BarsRosterFetcher {
       const page = await context.newPage();
       page.setDefaultTimeout(8000);
       page.setDefaultNavigationTimeout(12000);
+      stage = 'group-list';
       await page.goto(ORIGIN + LIST_PATH, {waitUntil: 'domcontentloaded'});
+      this.checkBrowserLocation(page.url(), LIST_PATH);
       // The BARS group index may be populated by XHR after DOMContentLoaded.
       await page.waitForTimeout(900);
       const listHtml = await page.content();
@@ -171,16 +194,22 @@ export class BarsRosterFetcher {
       if (new Set(matches).size !== 1) {
         throw new ConflictException('Группа БАРС не найдена однозначно');
       }
+      stage = 'group-details';
       await page.goto(ORIGIN + EDIT_PATH + '?sgID=' + encodeURIComponent(matches[0]),
         {waitUntil: 'domcontentloaded'});
+      this.checkBrowserLocation(page.url(), EDIT_PATH);
       const link = page.getByText('Студенты', {exact: true});
       if (await link.count() !== 1) {
         throw new ConflictException('Не удалось найти вкладку «Студенты»');
       }
+      stage = 'student-tab';
       await link.click();
+      this.checkBrowserLocation(page.url());
+      stage = 'student-table';
       let lastError: Error | undefined;
       for (let attempt = 0; attempt < 12; attempt++) {
         await page.waitForTimeout(450);
+        this.checkBrowserLocation(page.url());
         const result = parseBarsStudents(await page.content(), group);
         if (result.found && result.complete) return result.students;
         if (result.found) {
@@ -209,10 +238,20 @@ export class BarsRosterFetcher {
       }
       throw lastError ?? new ConflictException('Не найдена таблица студентов БАРС');
     } catch (error) {
-      this.logger.warn('BARS roster: fetch-or-parse-failed');
+      // Log only fixed stage/type tags, never page URL, student names or cookies.
+      const type = error instanceof UnauthorizedException ? 'session' :
+        error instanceof ConflictException ? 'content' :
+        error instanceof ServiceUnavailableException ? 'service' :
+        error instanceof Error && error.name === 'TimeoutError'
+          ? 'timeout' : 'navigation';
+      this.logger.warn('BARS roster: fetch-or-parse-failed stage=' +
+        stage + ' type=' + type);
       if (error instanceof ConflictException ||
+          error instanceof UnauthorizedException ||
           error instanceof ServiceUnavailableException) throw error;
-      throw new ServiceUnavailableException('Не удалось прочитать список БАРС');
+      throw new ServiceUnavailableException(
+        'Не удалось прочитать список БАРС (этап: ' + stage + ')',
+      );
     } finally {
       await context.close();
       await browser.close();

@@ -280,6 +280,43 @@ describe('BarsSessionVerifier', () => {
     expect(get).not.toHaveBeenCalled();
   });
 
+  it('follows only one canonical same-origin redirect without leaking cookies',
+      async () => {
+    get.mockReset();
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ERR_BAD_RESPONSE',
+      response: {status: 302, headers: {
+        location: '/bars_web/ST/Student/ListStudent/',
+      }},
+    });
+    get.mockResolvedValueOnce({status: 200, data: studentList});
+    get.mockResolvedValueOnce({status: 200, data: studentPage});
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .resolves.toMatchObject({recordBook: '123456'});
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(get.mock.calls[1][0])
+      .toBe('https://bars.mpei.ru/bars_web/ST/Student/ListStudent/');
+    expect(get.mock.calls[1][1].headers.Cookie)
+      .toBe('ASP.NET_SessionId=abc123');
+  });
+
+  it.each([
+    ['external', 'https://evil.example/login'],
+    ['other BARS page', '/bars_web/ST/Student/OtherStudent'],
+    ['BARS login', '/bars_web/Auth/Login'],
+    ['loop', '/bars_web/ST/Student/ListStudent'],
+  ])('refuses %s redirect without fetching its target',
+      async (_, location) => {
+    get.mockReset();
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ERR_BAD_RESPONSE',
+      response: {status: 302, headers: {location}},
+    });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects expired sessions that redirect to the login page', async () => {
     get.mockReset();
     get.mockRejectedValueOnce({

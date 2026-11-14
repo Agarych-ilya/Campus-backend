@@ -28,9 +28,42 @@ export class BarsSessionVerifier {
   private readonly origin = 'https://bars.mpei.ru';
   private readonly logger = new Logger(BarsSessionVerifier.name);
 
-  private async fetchBars(path: string, cookies: string): Promise<string> {
-    // Only call the two fixed BARS origins/paths. Never follow redirects:
-    // a login redirect must not forward session cookies elsewhere.
+  /** A redirect may be a canonical trailing slash, or an expired login.
+   * Follow at most one canonical same-origin redirect; never forward cookies
+   * to another host, login route or unrelated protected resource.
+   * Logging includes only a fixed category, never a Location header.
+   */
+  private safeCanonicalRedirect(
+    path: string, location: unknown,
+  ): { path?: string; category: string } {
+    if (typeof location !== 'string' || location.length > 2048) {
+      return { category: 'missing-location' };
+    }
+    try {
+      const current = new URL(path, this.origin);
+      const next = new URL(location, current);
+      if (next.origin !== this.origin || next.username || next.password ||
+          next.hash) return { category: 'external-or-invalid' };
+      if (/\/(?:Auth|Account)\/(?:Login|LogOn|SignIn)(?:\/|$)/i
+          .test(next.pathname)) return { category: 'login-redirect' };
+      const canonical = (pathname: string) => pathname.replace(/\/+$/, '');
+      if (canonical(next.pathname) !== canonical(current.pathname) ||
+          next.search !== current.search) {
+        return { category: 'different-bars-page' };
+      }
+      if (next.pathname + next.search === current.pathname + current.search) {
+        return { category: 'redirect-loop' };
+      }
+      return { path: next.pathname + next.search, category: 'canonical' };
+    } catch {
+      return { category: 'invalid-location' };
+    }
+  }
+
+  private async fetchBars(
+    path: string, cookies: string, redirected = false,
+  ): Promise<string> {
+    // Always disable Axios' automatic redirection to protect BARS cookies.
     const stage = path.startsWith('/bars_web/ST/Student/ListStudent')
       ? 'student-list'
       : path.startsWith('/bars_web/ST_Study/Main/Main')
@@ -56,30 +89,39 @@ export class BarsSessionVerifier {
       }
       return response.data;
     } catch (error) {
-      // Never log cookies, redirects, full URLs, HTML, student IDs or books.
+      if (error instanceof UnauthorizedException ||
+          error instanceof ServiceUnavailableException) throw error;
+      // Never log cookies, redirect URLs, HTML, names, student IDs or books.
       const status = axios.isAxiosError(error) ? error.response?.status : undefined;
       const rawCode = axios.isAxiosError(error) ? error.code : undefined;
       const code = typeof rawCode === 'string' && /^[A-Z_]{2,40}$/.test(rawCode)
         ? rawCode : 'unknown';
+      const isRedirect = status === 301 || status === 302 || status === 303 ||
+        status === 307 || status === 308;
+      const redirect = isRedirect
+        ? this.safeCanonicalRedirect(path,
+            axios.isAxiosError(error) ? error.response?.headers?.location : undefined)
+        : null;
+      if (redirect?.path && !redirected) {
+        return this.fetchBars(redirect.path, cookies, true);
+      }
       this.logger.warn(
         'BARS verification: request-failed stage=' + stage +
         ' status=' + (typeof status === 'number' ? status : 'none') +
-        ' code=' + code,
+        ' code=' + code +
+        (redirect ? ' redirect=' + (redirected ? 'second-redirect' : redirect.category) : ''),
       );
-      if (status === 301 || status === 302 || status === 303 ||
-          status === 307 || status === 308 || status === 401 ||
-          status === 403) {
-        // Safe troubleshooting details (no redirect URL or credentials).
-        // A redirect could be a site change, not necessarily an expired
-        // login, so never assert that the student's password was rejected.
+      if (isRedirect || status === 401 || status === 403) {
         const stageName = stage === 'student-list'
           ? 'список студентов'
           : 'профиль студента';
+        const reason = redirect?.category === 'login-redirect'
+          ? ' (перенаправление на вход)'
+          : '';
         throw new UnauthorizedException(
-          'БАРС не подтвердил сессию (' + stageName +
-          ', HTTP ' + status + '). Открой «Обновить вход в БАРС» ' +
-          'в учебном журнале. Если ошибка повторится, передай только ' +
-          'этап проверки и HTTP-код.',
+          'БАРС не подтвердил сессию (' + stageName + ', HTTP ' +
+          status + reason + '). Обнови вход в БАРС в CampusApp. ' +
+          'Если ошибка повторится, передай только этап и код.',
         );
       }
       if (status === 429 || (typeof status === 'number' && status >= 500) ||
@@ -87,8 +129,7 @@ export class BarsSessionVerifier {
         throw new ServiceUnavailableException(
           'Не удалось связаться с БАРС для проверки сессии' +
           (typeof status === 'number' ? ' (HTTP ' + status + ')' : '') +
-          '. Это может быть временная ошибка сети или сервера БАРС. ' +
-          'Повтори проверку позже.',
+          '. Повтори проверку позже.',
         );
       }
       throw new UnauthorizedException(
