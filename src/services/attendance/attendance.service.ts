@@ -234,108 +234,148 @@ export class AttendanceService {
     };
   }
 
-  async checkIn(actor: AttendanceIdentity, id: number) {
-    const lesson = await this.lesson(actor, id);
-    if (lesson.state !== 'open') throw new ConflictException('Журнал закрыт');
-    const members = await this.db.query(
-      'SELECT owner_key FROM campus_attendance_students ' +
-      'WHERE group_name=? AND owner_key=? LIMIT 1',
-      [actor.group, actor.ownerKey],
-    ) as Array<{ owner_key: string }>;
-    if (!members.length) {
-      throw new BadRequestException('Сначала добавь себя в список группы');
-    }
-    const existing = await this.db.query(
-      'SELECT status FROM campus_attendance_entries ' +
-      'WHERE lesson_id=? AND owner_key=?',
-      [id, actor.ownerKey],
-    ) as Array<{status: string}>;
-    if (existing.length && existing[0].status !== 'pending') {
-      throw new ConflictException('Отметка уже проверена старостой');
-    }
-    await this.db.query(
-      'INSERT INTO campus_attendance_entries (lesson_id,owner_key,status) ' +
-      "VALUES (?,?,'pending') ON DUPLICATE KEY UPDATE " +
-      "status='pending',updated_at=CURRENT_TIMESTAMP",
-      [id, actor.ownerKey],
+  private async ensureOpenTransaction(
+    connection: import('mysql2/promise').PoolConnection,
+    actor: AttendanceIdentity, id: number,
+  ) {
+    const [result] = await connection.execute(
+      'SELECT state FROM campus_attendance_lessons ' +
+      'WHERE id=? AND group_name=? FOR UPDATE',
+      [id, actor.group],
     );
-    await this.audit(id, actor.ownerKey, actor.ownerKey,
-      'checkin', existing[0]?.status ?? null, 'pending');
-    return { status: 'pending' };
+    const rows = result as unknown as Array<{ state: string }>;
+    if (rows.length !== 1 || rows[0].state !== 'open') {
+      throw new ConflictException('Журнал закрыт или недоступен');
+    }
   }
 
-  private async audit(
+  private async auditTransaction(
+    connection: import('mysql2/promise').PoolConnection,
     id: number, actor: string, target: string | null,
     action: string, before: string | null, after: string | null,
   ) {
-    await this.db.query(
+    await connection.execute(
       'INSERT INTO campus_attendance_audit ' +
       '(lesson_id,actor_key,student_key,action,old_status,new_status) ' +
-      'VALUES (?,?,?,?,?,?)', [id, actor, target, action, before, after],
+      'VALUES (?,?,?,?,?,?)',
+      [id, actor, target, action, before, after],
     );
+  }
+
+  async checkIn(actor: AttendanceIdentity, id: number) {
+    await this.lesson(actor, id);
+    return this.db.withTransaction(async connection => {
+      await this.ensureOpenTransaction(connection, actor, id);
+      const [memberRows] = await connection.execute(
+        'SELECT owner_key FROM campus_attendance_students ' +
+        'WHERE group_name=? AND owner_key=? LIMIT 1',
+        [actor.group, actor.ownerKey],
+      );
+      const members = memberRows as unknown as MemberRow[];
+      if (members.length !== 1) {
+        throw new BadRequestException('Сначала добавь себя в список группы');
+      }
+      const [oldRows] = await connection.execute(
+        'SELECT status FROM campus_attendance_entries ' +
+        'WHERE lesson_id=? AND owner_key=?',
+        [id, actor.ownerKey],
+      );
+      const existing = oldRows as unknown as Array<{status: string}>;
+      if (existing.length && existing[0].status !== 'pending') {
+        throw new ConflictException('Отметка уже проверена старостой');
+      }
+      await connection.execute(
+        'INSERT INTO campus_attendance_entries (lesson_id,owner_key,status) ' +
+        "VALUES (?,?,'pending') ON DUPLICATE KEY UPDATE " +
+        "status='pending',updated_at=CURRENT_TIMESTAMP",
+        [id, actor.ownerKey],
+      );
+      await this.auditTransaction(
+        connection, id, actor.ownerKey, actor.ownerKey,
+        'checkin', existing[0]?.status ?? null, 'pending',
+      );
+      return { status: 'pending' };
+    });
   }
 
   async decide(
     actor: AttendanceIdentity, id: number, dto: AttendanceDecisionDto,
   ) {
     this.starosta(actor);
-    const lesson = await this.lesson(actor, id);
-    if (lesson.state !== 'open') throw new ConflictException('Журнал закрыт');
-    const members = await this.db.query(
-      'SELECT owner_key FROM campus_attendance_students ' +
-      'WHERE group_name=? AND owner_key=? LIMIT 1',
-      [actor.group, dto.ownerKey],
-    ) as MemberRow[];
-    if (members.length !== 1) {
-      throw new NotFoundException('Студент не зарегистрирован в группе');
-    }
-    const old = await this.db.query(
-      'SELECT status FROM campus_attendance_entries ' +
-      'WHERE lesson_id=? AND owner_key=?',
-      [id, dto.ownerKey],
-    ) as Array<{ status: string }>;
-    await this.db.query(
-      'INSERT INTO campus_attendance_entries ' +
-      '(lesson_id,owner_key,status,note,reviewer_key) VALUES (?,?,?,?,?) ' +
-      'ON DUPLICATE KEY UPDATE status=VALUES(status),note=VALUES(note),' +
-      'reviewer_key=VALUES(reviewer_key),updated_at=CURRENT_TIMESTAMP',
-      [id, dto.ownerKey, dto.status, dto.note?.trim() ?? null, actor.ownerKey],
-    );
-    await this.audit(id, actor.ownerKey, dto.ownerKey,
-      'decision', old[0]?.status ?? null, dto.status);
-    return { status: dto.status };
+    await this.lesson(actor, id);
+    return this.db.withTransaction(async connection => {
+      await this.ensureOpenTransaction(connection, actor, id);
+      const [memberRows] = await connection.execute(
+        'SELECT owner_key FROM campus_attendance_students ' +
+        'WHERE group_name=? AND owner_key=? LIMIT 1',
+        [actor.group, dto.ownerKey],
+      );
+      const members = memberRows as unknown as MemberRow[];
+      if (members.length !== 1) {
+        throw new NotFoundException('Студент не зарегистрирован в группе');
+      }
+      const [oldRows] = await connection.execute(
+        'SELECT status FROM campus_attendance_entries ' +
+        'WHERE lesson_id=? AND owner_key=?',
+        [id, dto.ownerKey],
+      );
+      const old = oldRows as unknown as Array<{ status: string }>;
+      await connection.execute(
+        'INSERT INTO campus_attendance_entries ' +
+        '(lesson_id,owner_key,status,note,reviewer_key) VALUES (?,?,?,?,?) ' +
+        'ON DUPLICATE KEY UPDATE status=VALUES(status),note=VALUES(note),' +
+        'reviewer_key=VALUES(reviewer_key),updated_at=CURRENT_TIMESTAMP',
+        [id, dto.ownerKey, dto.status, dto.note?.trim() ?? null, actor.ownerKey],
+      );
+      await this.auditTransaction(
+        connection, id, actor.ownerKey, dto.ownerKey,
+        'decision', old[0]?.status ?? null, dto.status,
+      );
+      return { status: dto.status };
+    });
   }
 
   async close(actor: AttendanceIdentity, id: number, acknowledged: string[]) {
     this.starosta(actor);
-    const lesson = await this.lesson(actor, id);
-    if (lesson.state !== 'open') throw new ConflictException('Журнал уже закрыт');
-    const rows = await this.db.query(
-      'SELECT s.owner_key,e.status FROM campus_attendance_students s ' +
-      'LEFT JOIN campus_attendance_entries e ' +
-      'ON e.owner_key=s.owner_key AND e.lesson_id=? ' +
-      'WHERE s.group_name=? ORDER BY s.owner_key LIMIT 201',
-      [id, actor.group],
-    ) as Array<{ owner_key: string; status: string | null }>;
-    if (!rows.length || rows.length > 200 ||
-        rows.some(row => !['present','absent','excused'].includes(row.status ?? ''))) {
-      throw new ConflictException(
-        'Перед закрытием проверь присутствие всех студентов группы',
+    await this.lesson(actor, id);
+    if (acknowledged.length > 200) {
+      throw new BadRequestException('Слишком большой список студентов');
+    }
+    return this.db.withTransaction(async connection => {
+      await this.ensureOpenTransaction(connection, actor, id);
+      const [rosterRows] = await connection.execute(
+        'SELECT s.owner_key,e.status FROM campus_attendance_students s ' +
+        'LEFT JOIN campus_attendance_entries e ' +
+        'ON e.owner_key=s.owner_key AND e.lesson_id=? ' +
+        'WHERE s.group_name=? ORDER BY s.owner_key LIMIT 201',
+        [id, actor.group],
       );
-    }
-    const actual = rows.map(row => row.owner_key).sort();
-    const submitted = [...acknowledged].sort();
-    if (submitted.length !== actual.length ||
-        submitted.some((key, index) => key !== actual[index])) {
-      throw new ConflictException('Состав группы изменился, обнови журнал');
-    }
-    await this.db.query(
-      "UPDATE campus_attendance_lessons SET state='closed' " +
-      "WHERE id=? AND group_name=? AND state='open'",
-      [id, actor.group],
-    );
-    await this.audit(id, actor.ownerKey, null, 'close', 'open', 'closed');
-    return { state: 'closed', barsSynced: false };
+      const rows = rosterRows as unknown as Array<{
+        owner_key: string; status: string | null;
+      }>;
+      if (!rows.length || rows.length > 200 ||
+          rows.some(row =>
+            !['present','absent','excused'].includes(row.status ?? ''))) {
+        throw new ConflictException(
+          'Перед закрытием проверь присутствие всех студентов группы',
+        );
+      }
+      const actual = rows.map(row => row.owner_key).sort();
+      const submitted = [...acknowledged].sort();
+      if (submitted.length !== actual.length ||
+          submitted.some((key, index) => key !== actual[index])) {
+        throw new ConflictException('Состав группы изменился, обнови журнал');
+      }
+      await connection.execute(
+        "UPDATE campus_attendance_lessons SET state='closed' " +
+        "WHERE id=? AND group_name=? AND state='open'",
+        [id, actor.group],
+      );
+      await this.auditTransaction(
+        connection, id, actor.ownerKey, null, 'close', 'open', 'closed',
+      );
+      return { state: 'closed', barsSynced: false };
+    });
   }
 
   async barsPreview(actor: AttendanceIdentity, id: number) {
