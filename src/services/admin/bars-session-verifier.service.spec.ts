@@ -28,19 +28,19 @@ describe('BarsSessionVerifier', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
-  const groupGuid = 'cb991316-11df-ed11-80d9-005056be401c';
+  const groupGuid = '11111111-2222-4333-8444-555555555555';
   const starostaMenu =
     '<nav><a id="ddMessage"><span class="d-none d-md-inline">' +
-    'public\\OgarkovIA</span></a></nav>';
+    'public\\PetrovPS</span></a></nav>';
   const groupsHtml =
     '<a href="/bars_web/SG/StudyGroup/EditStudyGroup?sgID=' +
     groupGuid + '">А-03-23</a>';
   const starostaPage =
     '<div class="row"><label>Староста</label>' +
-    '<div><input value="Огарков Илья Александрович (А-03-23)"></div></div>' +
+    '<div><input value="Петров Пётр Сергеевич (А-03-23)"></div></div>' +
     '<table><tbody><tr>' +
-    '<td>public\\OgarkovIA</td><td>Огарков</td><td>Илья</td>' +
-    '<td>Александрович</td><td><a href="mailto:OgarkovIA@mpei.ru">' +
+    '<td>public\\PetrovPS</td><td>Петров</td><td>Пётр</td>' +
+    '<td>Сергеевич</td><td><a href="mailto:PetrovPS@mpei.ru">' +
     'Почта</a></td></tr></tbody></table>';
 
   it('grants starosta status only when authenticated BARS account matches ' +
@@ -67,7 +67,7 @@ describe('BarsSessionVerifier', () => {
       .mockResolvedValueOnce({
         status: 200,
         data: starostaPage.replace(
-          'value="Огарков Илья Александрович (А-03-23)"',
+          'value="Петров Пётр Сергеевич (А-03-23)"',
           'value="Иванова Елена Петровна (А-03-23)"',
         ),
       });
