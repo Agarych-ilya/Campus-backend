@@ -32,6 +32,9 @@ describe('BARS attendance - verified group and review workflow', () => {
       if (sql.startsWith('SELECT * FROM campus_attendance_lessons')) {
         return [lesson];
       }
+      if (sql.startsWith('SELECT state FROM campus_attendance_lessons')) {
+        return [{state: 'open'}];
+      }
       if (sql.startsWith('SELECT owner_key,display_name FROM campus_attendance_students')) {
         return [
           {owner_key: owner, display_name: 'Староста'},
@@ -59,8 +62,11 @@ describe('BARS attendance - verified group and review workflow', () => {
         }],
       })),
     };
+    const withTransaction = jest.fn(async (callback) =>
+      callback({execute: async (sql: string, params: unknown[]) =>
+        [await query(sql, params), []]}));
     api = new AttendanceService(
-      {query} as unknown as DbService,
+      {query, withTransaction} as unknown as DbService,
       schedule as unknown as ScheduleService,
     );
   });
@@ -135,6 +141,9 @@ describe('BARS attendance - verified group and review workflow', () => {
       async () => {
     query.mockImplementation(async (sql: string) => {
       if (sql.startsWith('SELECT * FROM campus_attendance_lessons')) return [lesson];
+      if (sql.startsWith('SELECT state FROM campus_attendance_lessons')) {
+        return [{state: 'open'}];
+      }
       if (sql.startsWith('SELECT s.owner_key,e.status')) return [
         {owner_key: owner, status: 'present'},
         {owner_key: classmate, status: null},
@@ -152,6 +161,9 @@ describe('BARS attendance - verified group and review workflow', () => {
       async () => {
     query.mockImplementation(async (sql: string) => {
       if (sql.startsWith('SELECT * FROM campus_attendance_lessons')) return [lesson];
+      if (sql.startsWith('SELECT state FROM campus_attendance_lessons')) {
+        return [{state: 'open'}];
+      }
       if (sql.startsWith('SELECT s.owner_key,e.status')) return [
         {owner_key: owner, status: 'present'},
         {owner_key: classmate, status: 'absent'},
