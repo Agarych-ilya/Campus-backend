@@ -12,6 +12,8 @@ export interface VerifiedBarsStudent {
   recordBook: string;
   /** Group confirmed from the protected BARS student row. */
   group?: string;
+  /** Verified profile ID, kept only as a server-side HMAC in session. */
+  studentId: string;
 }
 
 /**
@@ -205,6 +207,25 @@ export class BarsSessionVerifier {
     }
   }
 
+  /** BARS menu identifies the signed-in university account (not a
+   * username supplied by the phone). Only opaque HMAC is stored in session.
+   */
+  async verifyAccountLogin(cookies: string): Promise<string | null> {
+    try {
+      const $ = cheerio.load(
+        await this.fetchBars('/bars_web/Auth/Menu', cookies),
+      );
+      const label = $('#ddMessage span.d-none.d-md-inline')
+        .first().text().trim();
+      const login = label.split('\\').pop()?.trim() ?? '';
+      return /^[A-Za-z][A-Za-z0-9_.-]{2,63}$/.test(login)
+        ? login.toLowerCase() : null;
+    } catch {
+      this.logger.warn('BARS roster identity: account-menu-unavailable');
+      return null;
+    }
+  }
+
   async verify(cookies: string): Promise<VerifiedBarsStudent> {
     if (
       typeof cookies !== 'string' ||
@@ -260,6 +281,7 @@ export class BarsSessionVerifier {
     }
 
     let detailsPath: string;
+    let verifiedStudentId: string | undefined;
     // Diagnostic codes never contain cookies, full URLs, student IDs,
     // or record-book numbers.
     let rejectionReason = 'invalid-url';
@@ -321,6 +343,7 @@ export class BarsSessionVerifier {
       }
 
       const { studentId, isGuid, pathname } = profiles[0];
+      verifiedStudentId = isGuid ? studentId.toLowerCase() : studentId;
       // Only BARS-provided, validated identifiers go to known BARS endpoints.
       // GUID study pages expose the record book in #div-FormHeader.
       detailsPath = isGuid
@@ -371,6 +394,7 @@ export class BarsSessionVerifier {
     return {
       recordBook: listBook,
       group: headerAgrees ? listGroup : undefined,
+      studentId: verifiedStudentId!,
     };
   }
 }
