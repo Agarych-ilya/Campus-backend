@@ -1,6 +1,7 @@
+import { Type } from 'class-transformer';
 import {
   IsArray, IsIn, IsNotEmpty, IsOptional, IsString,
-  Matches, MaxLength,
+  Matches, MaxLength, ArrayMinSize, ArrayMaxSize, ValidateNested,
 } from 'class-validator';
 
 export class AttendanceMemberDto {
@@ -37,6 +38,39 @@ export class AttendanceDecisionDto {
 
   @IsOptional() @IsString() @MaxLength(300)
   note?: string;
+}
+
+export class BarsRosterStudentDto {
+  @IsString() @IsNotEmpty() @MaxLength(120)
+  fullName!: string;
+
+  /** Opaque record ID from the current BARS student list, when available. */
+  @IsOptional() @IsString() @MaxLength(120)
+  sourceId?: string;
+}
+
+export class AttendanceRosterImportDto {
+  @IsString() @Matches(/^[А-ЯЁA-Z0-9-]{3,40}$/)
+  group!: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(120)
+  @ValidateNested({ each: true })
+  @Type(() => BarsRosterStudentDto)
+  students!: BarsRosterStudentDto[];
+}
+
+export class AttendanceAbsencesDto {
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(120)
+  @IsString({ each: true })
+  @Matches(/^[a-f0-9]{64}$/, { each: true })
+  rosterKeys!: string[];
+
+  @IsArray() @ArrayMaxSize(120)
+  @IsString({ each: true })
+  @Matches(/^[a-f0-9]{64}$/, { each: true })
+  absentKeys!: string[];
 }
 
 export class AttendanceCloseDto {
