@@ -373,7 +373,7 @@ export class AttendanceService {
     const mine = await this.ownRosterKey(actor);
     if (!mine) return [];
     const rows = await this.db.query(
-      'SELECT l.lesson_date,l.lesson_time,l.subject ' +
+      'SELECT l.lesson_date,l.lesson_time,l.subject,l.lesson_type,l.room ' +
       'FROM campus_attendance_lessons l ' +
       'INNER JOIN campus_attendance_entries e ON e.lesson_id=l.id ' +
       'INNER JOIN campus_attendance_lesson_roster s ' +
@@ -384,10 +384,12 @@ export class AttendanceService {
       [actor.group, mine, from, to],
     ) as Array<{
       lesson_date: string; lesson_time: string; subject: string;
+      lesson_type: string; room: string;
     }>;
     return rows.map(row => ({
       date: row.lesson_date, time: row.lesson_time,
       subject: row.subject,
+      type: row.lesson_type, room: row.room,
     }));
   }
 
