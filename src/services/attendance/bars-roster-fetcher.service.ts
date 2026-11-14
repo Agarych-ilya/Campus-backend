@@ -143,8 +143,9 @@ export class BarsRosterFetcher {
         try {
           const url = new URL(req.url());
           allowed = url.protocol === 'https:' && url.origin === ORIGIN &&
-            url.pathname.startsWith('/bars_web/') &&
-            ['GET', 'POST'].includes(req.method());
+            (req.method() === 'GET' ||
+              (req.method() === 'POST' &&
+                url.pathname.startsWith('/bars_web/SG/StudyGroup/')));
         } catch { /* refuse invalid URL */ }
         return allowed ? route.continue() : route.abort();
       });
