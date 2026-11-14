@@ -27,6 +27,16 @@ export class AttendanceController {
     return { authenticated: true, ...await this.service.me(actor) };
   }
 
+  @Get('my-absences')
+  @UseGuards(AttendanceGuard)
+  myAbsences(
+    @Req() req: any,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.service.myAbsences(req.attendanceIdentity, from, to);
+  }
+
   @Get('roster')
   @UseGuards(AttendanceGuard)
   roster(@Req() req: any) {
