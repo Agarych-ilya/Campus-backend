@@ -35,6 +35,13 @@ describe('BARS attendance - verified group and review workflow', () => {
       if (sql.startsWith('SELECT state FROM campus_attendance_lessons')) {
         return [{state: 'open'}];
       }
+      if (sql.startsWith(
+        'SELECT owner_key,display_name FROM campus_attendance_roster')) {
+        return [
+          {owner_key: owner, display_name: 'Староста'},
+          {owner_key: classmate, display_name: 'Студент'},
+        ];
+      }
       if (sql.startsWith('SELECT owner_key,display_name FROM campus_attendance_students')) {
         return [
           {owner_key: owner, display_name: 'Староста'},
@@ -135,6 +142,69 @@ describe('BARS attendance - verified group and review workflow', () => {
     expect(privateView.students).toHaveLength(2);
     expect(privateView.students?.some(item =>
       item.status === 'pending')).toBe(true);
+  });
+
+  test('only server-approved starosta can import a group roster',
+      async () => {
+    const input = {
+      group, students: [
+        { fullName: 'Иванов Иван Иванович', sourceId: 'st-100' },
+        { fullName: 'Петров Пётр Петрович', sourceId: 'st-101' },
+      ],
+    };
+    process.env.SESSION_SECRET = 's'.repeat(48);
+    await expect(api.importRoster(student, input))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    await expect(api.importRoster(actor, { ...input, group: 'А-02-23' }))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    const imported = await api.importRoster(actor, input);
+    expect(imported).toMatchObject({count: 2, group, imported: true});
+    const inserted = query.mock.calls.filter(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_attendance_roster '));
+    expect(inserted).toHaveLength(2);
+    expect(inserted[0][1][1]).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  test('duplicate FIO and invalid data abort import before DB changes',
+      async () => {
+    process.env.SESSION_SECRET = 's'.repeat(48);
+    await expect(api.importRoster(actor, {
+      group, students: [
+        {fullName: 'Иванов Иван Иванович'},
+        {fullName: 'Иванов Иван Иванович'},
+      ],
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('UPDATE campus_attendance_roster SET active=0')))
+      .toBe(false);
+  });
+
+  test('reviewed absences mark selected absent and all others present',
+      async () => {
+    const result = await api.saveAbsences(actor, 8, {
+      rosterKeys: [owner, classmate],
+      absentKeys: [classmate],
+    });
+    expect(result).toEqual({
+      state: 'closed', absent: 1, present: 1, barsSynced: false,
+    });
+    const writes = query.mock.calls.filter(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_attendance_entries '));
+    expect(writes).toHaveLength(2);
+    expect(writes.map(([, params]) => params[2]).sort())
+      .toEqual(['absent', 'present']);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("SET state='closed'"))).toBe(true);
+  });
+
+  test('stale or forged roster selection cannot save attendance',
+      async () => {
+    await expect(api.saveAbsences(actor, 8, {
+      rosterKeys: [owner], absentKeys: [classmate],
+    })).rejects.toBeInstanceOf(ConflictException);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_attendance_entries ')))
+      .toBe(false);
   });
 
   test('closing fails until every group member has explicit final status',
