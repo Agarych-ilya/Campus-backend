@@ -10,6 +10,7 @@ import type { Response } from 'express';
 
 import { normalizeBarsRecordBook } from '../../auth/admin_identity';
 import { BarsSessionVerifier } from '../admin/bars-session-verifier.service';
+import { rosterIdentityHash } from '../attendance/attendance-identity';
 import {
   BarsListingLoginDto, CreateListingDto, ListingReportDto, UpdateListingDto,
 } from './listings.dto';
@@ -77,6 +78,7 @@ export class ListingsController {
     const verifiedStarosta = await this.bars.verifyStarosta(
       dto.cookieHeader, verified.group,
     );
+    const verifiedLogin = await this.bars.verifyAccountLogin(dto.cookieHeader);
     const key = ListingsService.ownerKey(
       normalizeBarsRecordBook(verified.recordBook),
     );
@@ -102,6 +104,12 @@ export class ListingsController {
     req.session.listingOwnerKey = key;
     // Group comes only from the verified BARS student row.
     req.session.listingGroup = verified.group ?? null;
+    req.session.listingRosterStudentHash = verified.group
+      ? rosterIdentityHash(verified.group, 'student', verified.studentId)
+      : null;
+    req.session.listingRosterLoginHash = verified.group
+      ? rosterIdentityHash(verified.group, 'login', verifiedLogin)
+      : null;
     req.session.listingVerifiedAt = Date.now();
     req.session.listingStarostaGroup =
       verifiedStarosta ? verified.group ?? null : null;
