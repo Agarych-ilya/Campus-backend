@@ -304,6 +304,10 @@ describe('BarsSessionVerifier', () => {
     ['external', 'https://evil.example/login'],
     ['other BARS page', '/bars_web/ST/Student/OtherStudent'],
     ['BARS login', '/bars_web/Auth/Login'],
+    ['BARS login with ReturnURL',
+      '/bars_web/?ReturnURL=%2Fbars_web%2FST%2FStudent%2FListStudent'],
+    ['BARS login with case-insensitive ReturnUrl',
+      '/bars_web/?returnUrl=https%3A%2F%2Fbars.mpei.ru%2Fbars_web%2FST%2FStudent%2FListStudent'],
     ['loop', '/bars_web/ST/Student/ListStudent'],
   ])('refuses %s redirect without fetching its target',
       async (_, location) => {
@@ -314,6 +318,21 @@ describe('BarsSessionVerifier', () => {
     });
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
       .rejects.toBeInstanceOf(UnauthorizedException);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies BARS root with ReturnURL as login, never a canonical URL',
+      async () => {
+    get.mockReset();
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ERR_BAD_RESPONSE',
+      response: {
+        status: 302,
+        headers: {location: '/bars_web/?ReturnURL=%2Fbars_web%2FST%2FStudent%2FListStudent'},
+      },
+    });
+    await expect(verifier.verify('ASP.NET_SessionId=stale'))
+      .rejects.toThrow(/Повтори вход в БАРС на телефоне/);
     expect(get).toHaveBeenCalledTimes(1);
   });
 

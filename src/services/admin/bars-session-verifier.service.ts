@@ -44,8 +44,22 @@ export class BarsSessionVerifier {
       const next = new URL(location, current);
       if (next.origin !== this.origin || next.username || next.password ||
           next.hash) return { category: 'external-or-invalid' };
-      if (/\/(?:Auth|Account)\/(?:Login|LogOn|SignIn)(?:\/|$)/i
-          .test(next.pathname)) return { category: 'login-redirect' };
+      // BARS sends unauthenticated users to /bars_web/?ReturnURL=...
+      // rather than always using an /Auth/Login path. This is not a
+      // canonical redirect and must never be treated as authenticated.
+      const normalizedPath = next.pathname.replace(/\/+$/, '').toLowerCase();
+      const loginEntry = normalizedPath === '/bars_web' &&
+        [...next.searchParams.keys()].some(key =>
+          key.toLowerCase() === 'returnurl');
+      if (loginEntry ||
+          /\/(?:Auth|Account)\/(?:Login|LogOn|SignIn)(?:\/|$)/i
+            .test(next.pathname)) {
+        return { category: 'login-redirect' };
+      }
+      if (normalizedPath === '/bars_web/auth/menu') {
+        // May be a role-specific landing page, not necessarily login.
+        return { category: 'menu-redirect' };
+      }
       const canonical = (pathname: string) => pathname.replace(/\/+$/, '');
       if (canonical(next.pathname) !== canonical(current.pathname) ||
           next.search !== current.search) {
@@ -120,7 +134,7 @@ export class BarsSessionVerifier {
           : '';
         throw new UnauthorizedException(
           'БАРС не подтвердил сессию (' + stageName + ', HTTP ' +
-          status + reason + '). Обнови вход в БАРС в CampusApp. ' +
+          status + reason + '). Повтори вход в БАРС на телефоне через CampusApp. ' +
           'Если ошибка повторится, передай только этап и код.',
         );
       }
