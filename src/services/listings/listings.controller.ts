@@ -72,6 +72,11 @@ export class ListingsController {
       );
     }
     const verified = await this.bars.verify(dto.cookieHeader);
+    // The official role is verified from the authenticated BARS group page.
+    // It is never accepted from a Flutter-provided isStarosta flag.
+    const verifiedStarosta = await this.bars.verifyStarosta(
+      dto.cookieHeader, verified.group,
+    );
     const key = ListingsService.ownerKey(
       normalizeBarsRecordBook(verified.recordBook),
     );
@@ -98,6 +103,10 @@ export class ListingsController {
     // Group comes only from the verified BARS student row.
     req.session.listingGroup = verified.group ?? null;
     req.session.listingVerifiedAt = Date.now();
+    req.session.listingStarostaGroup =
+      verifiedStarosta ? verified.group ?? null : null;
+    req.session.listingStarostaVerifiedAt =
+      verifiedStarosta ? req.session.listingVerifiedAt : null;
     req.session.listingCsrf = randomBytes(32).toString('hex');
     await new Promise<void>((resolve, reject) =>
       req.session.save((error: Error | null) =>
