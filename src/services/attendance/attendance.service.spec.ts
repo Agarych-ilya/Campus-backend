@@ -5,6 +5,7 @@ import { DbService } from '../../db.service';
 import { ScheduleService } from '../../schedule/schedule.service';
 import { ListingsService } from '../listings/listings.service';
 import { attendanceIdentity } from './attendance.guard';
+import { rosterIdentityHash } from './attendance-identity';
 import { AttendanceService } from './attendance.service';
 
 const oldSecret = process.env.SESSION_SECRET;
@@ -224,6 +225,84 @@ describe('BARS attendance - verified group and review workflow', () => {
     expect(query.mock.calls.some(([sql]) =>
       String(sql).startsWith('INSERT INTO campus_attendance_entries ')))
       .toBe(false);
+  });
+
+  test('import maps BARS university email to an opaque student identity', async () => {
+    process.env.SESSION_SECRET = 's'.repeat(48);
+    await api.importRoster(actor, {
+      group, students: [
+        {fullName: 'Иванов Иван Иванович', email: 'ivanoviv@mpei.ru'},
+        {fullName: 'Петров Пётр Петрович', email: 'PetrovPS@mpei.ru'},
+      ],
+    });
+    const associations = query.mock.calls.filter(([sql]) =>
+      String(sql).startsWith(
+        'INSERT INTO campus_attendance_roster_accounts',
+      ));
+    expect(associations).toHaveLength(2);
+    expect(associations[1][1][3]).toBe(
+      rosterIdentityHash(group, 'login', 'petrovps'),
+    );
+    expect(JSON.stringify(associations)).not.toContain('PetrovPS@mpei.ru');
+  });
+
+  test('my-absences returns only verified student's own closed absences',
+      async () => {
+    process.env.SESSION_SECRET = 's'.repeat(48);
+    const studentHash = rosterIdentityHash(
+      group, 'login', 'petrovps')!;
+    const personalActor = {...student, rosterLoginHash: studentHash};
+    query.mockImplementation(async (sql: string, values?: unknown[]) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster')) {
+        expect(values).toEqual([group, '', studentHash]);
+        return [{owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT l.lesson_date,l.lesson_time')) {
+        expect(sql).toContain("l.state='closed'");
+        expect(sql).toContain("e.status='absent'");
+        expect(sql).toContain('campus_attendance_lesson_roster');
+        expect(values).toEqual([
+          group, classmate, '2026-11-09', '2026-11-15',
+        ]);
+        return [{
+          lesson_date: '2026-11-12',
+          lesson_time: '09:20 - 10:55',
+          subject: 'Моделирование систем управления',
+          lesson_type: 'Лекция',
+          room: 'В-308',
+        }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const actual = await api.myAbsences(
+      personalActor, '2026-11-09', '2026-11-15');
+    expect(actual).toEqual([{
+      date: '2026-11-12',
+      time: '09:20 - 10:55',
+      subject: 'Моделирование систем управления',
+      type: 'Лекция',
+      room: 'В-308',
+    }]);
+    expect((await api.myAbsences(
+      student, '2026-11-09', '2026-11-15')).length).toBe(0);
+  });
+
+  test('ambiguous roster account identities never expose someone else N',
+      async () => {
+    const current = {...student, rosterLoginHash: 'd'.repeat(64)};
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster')) {
+        return [{owner_key: owner}, {owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT l.lesson_date,l.lesson_time')) {
+        throw new Error('Must not query absences for ambiguous identity');
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    expect(await api.myAbsences(
+      current, '2026-11-09', '2026-11-15')).toEqual([]);
   });
 
   test('closing fails until every group member has explicit final status',
