@@ -323,6 +323,24 @@ describe('CampusCloudService security', () => {
       String(sql).startsWith('UPDATE campus_cloud_files'))).toBe(false);
   });
 
+  test('folder listing fetches all 500 possible owned files, not just 150',
+      async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_cloud_folders')) {
+        return [{ id: 7, owner_key: owner, name: 'UBS',
+          visibility: 'public', group_code: null }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return { affectedRows: 1 };
+    });
+    await cloud.list(ownerViewer, { mode: 'mine', folderId: '7' });
+    const select = query.mock.calls.find(([sql]) =>
+      String(sql).startsWith('SELECT f.*'));
+    expect(select).toBeDefined();
+    expect(select[0]).toContain('ORDER BY f.id DESC LIMIT 1000');
+    expect(select[1]).toEqual([owner, owner, 'А-03-23', owner, owner, 7]);
+  });
+
   test('unified file listing includes own, group and public materials', async () => {
     await cloud.list(ownerViewer, { mode: 'search' });
     const select = query.mock.calls.find(([sql]) =>
