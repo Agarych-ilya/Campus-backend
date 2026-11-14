@@ -21,6 +21,7 @@ import { RoomBookingsService } from './room-bookings/room-bookings.service';
 import { AttendanceController } from './attendance/attendance.controller';
 import { AttendanceService } from './attendance/attendance.service';
 import { AttendanceGuard } from './attendance/attendance.guard';
+import { BarsRosterFetcher } from './attendance/bars-roster-fetcher.service';
 import { ScheduleService } from '../schedule/schedule.service';
 
 @Module({
@@ -41,6 +42,7 @@ import { ScheduleService } from '../schedule/schedule.service';
     RoomBookingsService,
     AttendanceService,
     AttendanceGuard,
+    BarsRosterFetcher,
     ScheduleService,
   ],
 })

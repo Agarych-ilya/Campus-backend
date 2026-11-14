@@ -27,6 +27,7 @@ describe('BARS attendance - verified group and review workflow', () => {
   let query: jest.Mock;
   let api: AttendanceService;
   let schedule: { getSchedule: jest.Mock };
+  let fetchRoster: jest.Mock;
 
   beforeEach(() => {
     query = jest.fn(async (sql: string) => {
@@ -73,9 +74,11 @@ describe('BARS attendance - verified group and review workflow', () => {
     const withTransaction = jest.fn(async (callback) =>
       callback({execute: async (sql: string, params: unknown[]) =>
         [await query(sql, params), []]}));
+    fetchRoster = jest.fn();
     api = new AttendanceService(
       {query, withTransaction} as unknown as DbService,
       schedule as unknown as ScheduleService,
+      {fetch: fetchRoster} as unknown as import('./bars-roster-fetcher.service').BarsRosterFetcher,
     );
   });
 
@@ -185,6 +188,25 @@ describe('BARS attendance - verified group and review workflow', () => {
     expect(inserted[0][1][1]).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  test('server-side roster sync imports only BARS-fetched students', async () => {
+    process.env.SESSION_SECRET = 's'.repeat(48);
+    fetchRoster.mockResolvedValue([
+      {fullName: 'Иванов Иван Иванович', email: 'ivanovii@mpei.ru'},
+      {fullName: 'Петров Пётр Петрович', email: 'petrovpp@mpei.ru'},
+      {fullName: 'Сидоров Олег Николаевич', email: 'sidorovon@mpei.ru'},
+    ]);
+    await expect(api.syncFromBars(student, 'private-cookie'))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(fetchRoster).not.toHaveBeenCalled();
+    const result = await api.syncFromBars(actor, 'private-cookie');
+    expect(result).toMatchObject({count: 3, group, imported: true});
+    expect(fetchRoster).toHaveBeenCalledWith('private-cookie', group);
+    expect(query.mock.calls.some(([sql, params]) =>
+      String(sql).includes('campus_attendance_roster_verified') &&
+      JSON.stringify(params).includes('backend_bars_verified'))).toBe(true);
+    expect(JSON.stringify(query.mock.calls)).not.toContain('private-cookie');
+  });
+
   test('duplicate FIO and invalid data abort import before DB changes',
       async () => {
     process.env.SESSION_SECRET = 's'.repeat(48);
@@ -246,7 +268,7 @@ describe('BARS attendance - verified group and review workflow', () => {
     expect(JSON.stringify(associations)).not.toContain('PetrovPS@mpei.ru');
   });
 
-  test('my-absences returns only verified student's own closed absences',
+  test("my-absences returns only verified student\'s own closed absences",
       async () => {
     process.env.SESSION_SECRET = 's'.repeat(48);
     const studentHash = rosterIdentityHash(

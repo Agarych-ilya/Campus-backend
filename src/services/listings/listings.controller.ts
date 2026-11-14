@@ -11,6 +11,8 @@ import type { Response } from 'express';
 import { normalizeBarsRecordBook } from '../../auth/admin_identity';
 import { BarsSessionVerifier } from '../admin/bars-session-verifier.service';
 import { rosterIdentityHash } from '../attendance/attendance-identity';
+import { attendanceIdentity } from '../attendance/attendance.guard';
+import { AttendanceService } from '../attendance/attendance.service';
 import {
   BarsListingLoginDto, CreateListingDto, ListingReportDto, UpdateListingDto,
 } from './listings.dto';
@@ -28,6 +30,7 @@ export class ListingsController {
   constructor(
     private readonly listings: ListingsService,
     private readonly bars: BarsSessionVerifier,
+    private readonly attendance: AttendanceService,
   ) {}
 
   private sessionKey(req: any): string | undefined {
@@ -120,7 +123,21 @@ export class ListingsController {
       req.session.save((error: Error | null) =>
         error ? reject(error) : resolve()),
     );
+    // The signed-in starosta's protected BARS cookies are available only
+    // here. Perform the roster fetch on the server before discarding them.
+    // A temporary BARS outage must not invalidate a successful login.
+    let rosterSync: 'ok' | 'failed' | 'not_starosta' = 'not_starosta';
+    const actor = attendanceIdentity(req.session);
+    if (actor?.isStarosta) {
+      try {
+        await this.attendance.syncFromBars(actor, dto.cookieHeader);
+        rosterSync = 'ok';
+      } catch {
+        rosterSync = 'failed';
+      }
+    }
     return {
+      rosterSync,
       authenticated: true,
       csrfToken: req.session.listingCsrf,
       group: req.session.listingGroup,

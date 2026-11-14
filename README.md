@@ -304,3 +304,12 @@ flutter run -d emulator-5554 --dart-define=CAMPUS_API_BASE_URL=http://127.0.0.1:
   <b>Campus Backend</b> · API для студенческого CampusApp<br>
   <sub><a href="https://github.com/Agarych-ilya/CampusApp">Flutter-клиент</a> · <a href="https://github.com/Agarych-ilya/Campus-backend">Исходный код сервера</a></sub>
 </div>
+### Серверная синхронизация группы из БАРС
+
+Для журнала старосты после `npm ci` один раз запустите
+`npx playwright install chromium` на хосте бэкенда. При подтверждении
+входа старосты список его группы считывается и сохраняется сервером
+без показа страницы БАРС во Flutter. При сбое вход сохраняется,
+а устаревший список не перезаписывается.
+
+Подробности: [docs/attendance-journal.md](docs/attendance-journal.md).

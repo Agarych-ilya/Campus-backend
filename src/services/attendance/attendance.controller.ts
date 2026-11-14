@@ -5,6 +5,11 @@ import {
 } from '@nestjs/common';
 import { attendanceIdentity, AttendanceGuard } from './attendance.guard';
 import { AttendanceService } from './attendance.service';
+import { BarsSessionVerifier } from '../admin/bars-session-verifier.service';
+import { ListingsService } from '../listings/listings.service';
+import { normalizeBarsRecordBook } from '../../auth/admin_identity';
+import { normalizedStudyGroup } from '../lesson-notes/lesson-group-normalizer';
+import { BarsListingLoginDto } from '../listings/listings.dto';
 import {
   AttendanceCloseDto, AttendanceDateDto, AttendanceDecisionDto,
   AttendanceMemberDto, AttendanceOpenLessonDto,
@@ -18,7 +23,10 @@ const validate = new ValidationPipe({
 /** CampusApp attendance journal; no credentials or arbitrary URLs from phones. */
 @Controller('services/attendance')
 export class AttendanceController {
-  constructor(private readonly service: AttendanceService) {}
+  constructor(
+    private readonly service: AttendanceService,
+    private readonly barsVerifier: BarsSessionVerifier,
+  ) {}
 
   @Get('session')
   async session(@Req() req: any) {
@@ -41,6 +49,29 @@ export class AttendanceController {
   @UseGuards(AttendanceGuard)
   roster(@Req() req: any) {
     return this.service.roster(req.attendanceIdentity);
+  }
+
+  /** Re-synchronize a previously logged-in starosta, without opening a
+   * student-table WebView. Credentials must match the current Campus session.
+   */
+  @Post('roster/sync')
+  @UseGuards(AttendanceGuard) @UsePipes(validate)
+  async syncRoster(@Req() req: any, @Body() dto: BarsListingLoginDto) {
+    const actor = req.attendanceIdentity;
+    if (!actor.isStarosta) {
+      throw new ForbiddenException('Только староста может обновить список');
+    }
+    const peer = req.socket?.remoteAddress ?? '';
+    const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer);
+    if (!req.secure && !local) {
+      throw new ForbiddenException('Для передачи сессии БАРС нужен HTTPS');
+    }
+    const verified = await this.barsVerifier.verify(dto.cookieHeader);
+    if (ListingsService.ownerKey(normalizeBarsRecordBook(verified.recordBook)) !==
+        actor.ownerKey || normalizedStudyGroup(verified.group ?? '') !== actor.group) {
+      throw new ForbiddenException('Сессия БАРС принадлежит другому студенту');
+    }
+    return this.service.syncFromBars(actor, dto.cookieHeader);
   }
 
   @Post('roster/import')

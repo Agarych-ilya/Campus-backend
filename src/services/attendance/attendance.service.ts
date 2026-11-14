@@ -8,6 +8,7 @@ import { ScheduleService } from '../../schedule/schedule.service';
 import { normalizedStudyGroup } from '../lesson-notes/lesson-group-normalizer';
 import { AttendanceIdentity } from './attendance.guard';
 import { rosterIdentityHash } from './attendance-identity';
+import { BarsRosterFetcher } from './bars-roster-fetcher.service';
 import {
   AttendanceOpenLessonDto, AttendanceDecisionDto,
   AttendanceRosterImportDto, AttendanceAbsencesDto,
@@ -29,6 +30,7 @@ export class AttendanceService {
   constructor(
     private readonly db: DbService,
     private readonly schedule: ScheduleService,
+    private readonly barsRoster: BarsRosterFetcher,
   ) {}
 
   private schemaPromise?: Promise<void>;
@@ -104,6 +106,13 @@ export class AttendanceService {
           ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
         );
         await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_attendance_roster_verified (' +
+          'group_name VARCHAR(60) NOT NULL PRIMARY KEY, ' +
+          'source VARCHAR(32) NOT NULL, ' +
+          'verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP' +
+          ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
+        await this.db.query(
           'CREATE TABLE IF NOT EXISTS campus_attendance_audit (' +
           'id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, ' +
           'lesson_id BIGINT UNSIGNED NOT NULL, actor_key CHAR(64) NOT NULL, ' +
@@ -154,6 +163,10 @@ export class AttendanceService {
       'WHERE group_name=? ORDER BY id DESC LIMIT 1',
       [actor.group],
     ) as Array<{ created_at: Date|string; student_count: number }>;
+    const verified = await this.db.query(
+      'SELECT source FROM campus_attendance_roster_verified ' +
+      'WHERE group_name=? LIMIT 1', [actor.group],
+    ) as Array<{source: string}>;
     return {
       group: actor.group,
       students: students.map(row => ({
@@ -161,13 +174,24 @@ export class AttendanceService {
       })),
       imported: syncRows.length > 0,
       importedAt: syncRows[0]?.created_at ?? null,
-      // Data was captured from BARS WebView by the starosta; the server
-      // has not independently certified the roster against BARS.
-      verification: 'starosta_reviewed_bars_page',
+      verification: verified[0]?.source === 'backend_bars_verified'
+        ? 'backend_bars_verified' : 'starosta_reviewed_bars_page',
     };
   }
 
-  async importRoster(actor: AttendanceIdentity, dto: AttendanceRosterImportDto) {
+  /** Server owns the browser, HTML parsing and database import. Raw BARS
+   * credentials are used only for this request, never persisted to MySQL.
+   */
+  async syncFromBars(actor: AttendanceIdentity, cookies: string) {
+    this.starosta(actor);
+    const students = await this.barsRoster.fetch(cookies, actor.group);
+    return this.importRoster(actor, {group: actor.group, students}, true);
+  }
+
+  async importRoster(
+    actor: AttendanceIdentity, dto: AttendanceRosterImportDto,
+    verifiedByServer = false,
+  ) {
     this.starosta(actor);
     await this.ensureSchema();
     if (normalizedStudyGroup(dto.group) !== actor.group) {
@@ -258,6 +282,19 @@ export class AttendanceService {
         '(group_name,actor_key,student_count) VALUES (?,?,?)',
         [actor.group, actor.ownerKey, prepared.length],
       );
+      if (verifiedByServer) {
+        await connection.execute(
+          'INSERT INTO campus_attendance_roster_verified ' +
+          '(group_name,source) VALUES (?,?) ON DUPLICATE KEY UPDATE ' +
+          'source=VALUES(source),verified_at=CURRENT_TIMESTAMP',
+          [actor.group, 'backend_bars_verified'],
+        );
+      } else {
+        await connection.execute(
+          'DELETE FROM campus_attendance_roster_verified WHERE group_name=?',
+          [actor.group],
+        );
+      }
     });
     return { group: actor.group, count: prepared.length, imported: true };
   }
