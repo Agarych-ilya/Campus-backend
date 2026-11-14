@@ -96,6 +96,115 @@ export class BarsSessionVerifier {
     }
   }
 
+  /**
+   * Prove a starosta role from three BARS-protected pages, not from Flutter.
+   * All URLs are fixed or validated BARS group links. On any ambiguity,
+   * return false and do not grant attendance editing privileges.
+   */
+  async verifyStarosta(cookies: string, group: string | undefined): Promise<boolean> {
+    if (!group || !/^[А-ЯЁA-Z0-9]+(?:-[А-ЯЁA-Z0-9]+){1,3}$/.test(group)) {
+      return false;
+    }
+    const normalizeGroup = (value: string) => value
+      .toUpperCase().replace(/A/g, 'А').replace(/[–—−]/g, '-')
+      .replace(/\s+/g, '');
+    const normalizeName = (value: string) => value
+      .normalize('NFC').trim().toLocaleLowerCase('ru-RU')
+      .replace(/\s+/g, ' ').replace(/ё/g, 'е');
+
+    try {
+      const menu = cheerio.load(await this.fetchBars('/bars_web/Auth/Menu', cookies));
+      const accountLabel = menu('#ddMessage span.d-none.d-md-inline')
+        .first().text().trim();
+      const login = accountLabel.split('\\').pop() ?? '';
+      if (!/^[A-Za-z][A-Za-z0-9_.-]{2,63}$/.test(login)) {
+        this.logger.warn('BARS starosta verification: menu-login-missing');
+        return false;
+      }
+
+      const list = cheerio.load(
+        await this.fetchBars('/bars_web/SG/StudyGroup/ListStudyGroup', cookies),
+      );
+      const groupLinks = list('a[href]').toArray()
+        .filter(el => normalizeGroup(list(el).text().trim()) === normalizeGroup(group))
+        .map(el => list(el).attr('href') ?? '')
+        .filter(href => href.includes('EditStudyGroup?'));
+      const ids = new Set<string>();
+      for (const href of groupLinks) {
+        const url = new URL(href, this.origin);
+        if (url.origin !== this.origin || url.username || url.password ||
+            url.hash || url.pathname !== '/bars_web/SG/StudyGroup/EditStudyGroup' ||
+            [...url.searchParams.keys()].some(k => k !== 'sgID')) continue;
+        const id = url.searchParams.getAll('sgID');
+        if (id.length === 1 &&
+            /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id[0])) {
+          ids.add(id[0].toLowerCase());
+        }
+      }
+      if (ids.size !== 1) {
+        this.logger.warn('BARS starosta verification: group-link-not-unique');
+        return false;
+      }
+      const sgID = [...ids][0];
+      const groupPage = cheerio.load(await this.fetchBars(
+        '/bars_web/SG/StudyGroup/EditStudyGroup?sgID=' + encodeURIComponent(sgID),
+        cookies,
+      ));
+      // Match only the field explicitly labeled "Староста".
+      const label = groupPage('label, th, dt, div, span').toArray().find(el => {
+        const wrapped = groupPage(el);
+        return wrapped.children().length === 0 &&
+          wrapped.text().trim().replace(/:$/, '') === 'Староста';
+      });
+      if (!label) {
+        this.logger.warn('BARS starosta verification: starosta-field-missing');
+        return false;
+      }
+      const $label = groupPage(label);
+      const inputAndText = (el: ReturnType<typeof groupPage>) =>
+        (el.text() + ' ' + el.find('input, textarea').toArray()
+          .map(child => groupPage(child).attr('value') ?? '').join(' ')).trim();
+      const candidate = [
+        inputAndText($label.next()),
+        inputAndText($label.parent().next()),
+        inputAndText($label.closest('tr, .row, .form-group').first()),
+      ].find(v => v.length > 3 && v.length < 400) ?? '';
+      if (!candidate) {
+        this.logger.warn('BARS starosta verification: starosta-name-missing');
+        return false;
+      }
+
+      // This table also includes other journal maintainers. Their presence
+      // alone is NOT sufficient: the person must be the named starosta above,
+      // and the BARS account login must match their official email.
+      const rows = groupPage('tr').toArray();
+      const verified = rows.filter(row => {
+        const cells = groupPage(row).find('td');
+        if (cells.length < 5) return false;
+        const name = [1, 2, 3].map(i => cells.eq(i).text().trim()).join(' ');
+        const canonical = normalizeName(name);
+        if (canonical.split(' ').filter(Boolean).length < 3 ||
+            !normalizeName(candidate).includes(canonical)) return false;
+        const addresses = groupPage(row).find('a[href^="mailto:"]').toArray()
+          .map(el => (groupPage(el).attr('href') ?? '').slice(7))
+          .filter(email => /^[A-Za-z0-9_.-]+@mpei\.ru$/i.test(email));
+        return addresses.some(email =>
+          email.split('@')[0].toLowerCase() === login.toLowerCase());
+      });
+
+      if (verified.length !== 1) {
+        this.logger.warn('BARS starosta verification: identity-does-not-match');
+        return false;
+      }
+      return true;
+    } catch {
+      // Missing permissions, HTML changes, or BARS downtime never turn into
+      // a privileged session. The user may retry verification later.
+      this.logger.warn('BARS starosta verification: protected-page-unavailable');
+      return false;
+    }
+  }
+
   async verify(cookies: string): Promise<VerifiedBarsStudent> {
     if (
       typeof cookies !== 'string' ||
