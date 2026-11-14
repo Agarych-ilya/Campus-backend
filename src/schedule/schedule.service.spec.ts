@@ -18,6 +18,38 @@ describe('ScheduleService: MPEI group lookup', () => {
     jest.restoreAllMocks();
   });
 
+  it('suggests distinct group names from the live RUZ search', async () => {
+    jest.spyOn(axios, 'get').mockResolvedValue({
+      data: [
+        { id: 101, label: 'А-03-23' },
+        { id: 202, name: 'А-04-23' },
+        { id: 303, label: 'А-03-23' },
+      ],
+    } as never);
+
+    await expect(service.searchGroups('А-0')).resolves.toEqual([
+      'А-03-23',
+      'А-04-23',
+    ]);
+  });
+
+  it('returns no suggestions for a one-character query', async () => {
+    const get = jest.spyOn(axios, 'get');
+    await expect(service.searchGroups('А')).resolves.toEqual([]);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('falls back from HTTPS to HTTP for group autocomplete', async () => {
+    const get = jest.spyOn(axios, 'get');
+    get.mockRejectedValueOnce(new Error('TLS unavailable'));
+    get.mockResolvedValueOnce({
+      data: [{ id: 202, label: 'А-04-23' }],
+    } as never);
+
+    await expect(service.searchGroups('А-04')).resolves.toEqual(['А-04-23']);
+    expect(String(get.mock.calls[1][0])).toContain('http://ts.mpei.ru/');
+  });
+
   it('chooses an exact group match instead of the first suggestion', async () => {
     jest.spyOn(axios, 'get').mockResolvedValue({
       data: [
@@ -29,6 +61,19 @@ describe('ScheduleService: MPEI group lookup', () => {
     const id = await (service as any).getGroupId('А-03-23');
 
     expect(id).toBe('202');
+  });
+
+  it('rejects a non-exact group instead of silently using first result', async () => {
+    jest.spyOn(axios, 'get').mockResolvedValue({
+      data: [
+        { id: 101, label: 'А-03-22' },
+        { id: 202, label: 'А-03-23' },
+      ],
+    } as never);
+
+    await expect(
+      (service as any).getGroupId('А-03'),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('retries official HTTP when the HTTPS search is unavailable', async () => {

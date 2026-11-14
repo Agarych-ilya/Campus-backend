@@ -9,6 +9,8 @@ import { normalizeBarsRecordBook } from '../../auth/admin_identity';
 
 export interface VerifiedBarsStudent {
   recordBook: string;
+  /** Group confirmed from the protected BARS student row. */
+  group?: string;
 }
 
 /**
@@ -103,6 +105,12 @@ export class BarsSessionVerifier {
     const hrefs = links.toArray().map((anchor) => $(anchor).attr('href') ?? '');
     const cells = row.find('td');
     const listBook = normalizeBarsRecordBook(cells.eq(1).text());
+    // The fourth cell belongs to this exact BARS student row, not to a
+    // client-supplied or search-selected timetable. Fail closed if absent.
+    const listGroupCandidate = cells.eq(3).text().replace(/\u00a0/g, ' ').trim();
+    const listGroup = /^[A-ZА-ЯЁ0-9]+(?:-[A-ZА-ЯЁ0-9]+){1,3}$/i.test(listGroupCandidate)
+      && listGroupCandidate.length <= 60
+      ? listGroupCandidate.toUpperCase() : undefined;
 
     if (!listBook || listBook.length > 64 || cells.length < 4) {
       this.logger.warn('BARS admin verification: list-record-book-not-found');
@@ -206,6 +214,21 @@ export class BarsSessionVerifier {
       throw new UnauthorizedException('Профиль БАРС не прошёл проверку');
     }
 
-    return { recordBook: listBook };
+    // Some BARS study pages also expose the group in the header. If both
+    // independent BARS locations disagree, no group privilege is granted.
+    const headerGroups = spans.toArray()
+      .map((span) => $details(span).text().replace(/\u00a0/g, ' ').trim())
+      .filter((text) => /^[A-ZА-ЯЁ0-9]+(?:-[A-ZА-ЯЁ0-9]+){1,3}$/i.test(text))
+      .map((text) => text.toUpperCase());
+    const comparable = (value: string) => value
+      .replace(/A/g, 'А').replace(/[–—−]/g, '-');
+    const headerAgrees = headerGroups.length === 0 ||
+      (!!listGroup && headerGroups.every(
+        (value) => comparable(value) === comparable(listGroup),
+      ));
+    return {
+      recordBook: listBook,
+      group: headerAgrees ? listGroup : undefined,
+    };
   }
 }

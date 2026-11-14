@@ -52,7 +52,11 @@ export class ListingsController {
 
   @Get('session')
   session(@Req() req: any) {
-    return { authenticated: !!this.sessionKey(req) };
+    const authenticated = !!this.sessionKey(req);
+    return {
+      authenticated,
+      group: authenticated ? (req.session?.listingGroup ?? null) : null,
+    };
   }
 
   @Post('bars-login')
@@ -91,13 +95,19 @@ export class ListingsController {
     );
     Object.assign(req.session, previous);
     req.session.listingOwnerKey = key;
+    // Group comes only from the verified BARS student row.
+    req.session.listingGroup = verified.group ?? null;
     req.session.listingVerifiedAt = Date.now();
     req.session.listingCsrf = randomBytes(32).toString('hex');
     await new Promise<void>((resolve, reject) =>
       req.session.save((error: Error | null) =>
         error ? reject(error) : resolve()),
     );
-    return { authenticated: true, csrfToken: req.session.listingCsrf };
+    return {
+      authenticated: true,
+      csrfToken: req.session.listingCsrf,
+      group: req.session.listingGroup,
+    };
   }
 
   @Get(':id')
