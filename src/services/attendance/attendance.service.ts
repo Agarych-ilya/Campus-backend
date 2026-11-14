@@ -175,7 +175,7 @@ export class AttendanceService {
     const prepared = dto.students.map(student => {
       const name = this.clean(student.fullName);
       if (name.length < 5 || name.length > 120 ||
-          !/^[\\p{L} .'-]+$/u.test(name) ||
+          !/^[\p{L} .'-]+$/u.test(name) ||
           name.split(' ').filter(Boolean).length < 2) {
         throw new BadRequestException('Некорректное ФИО в списке БАРС');
       }
