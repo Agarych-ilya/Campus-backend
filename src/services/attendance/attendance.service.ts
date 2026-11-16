@@ -127,6 +127,31 @@ export class AttendanceService {
           'INDEX idx_grade_rank_semester(semester,average_score)' +
           ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
         );
+        // New source of truth: existing currentScore averages are invalid.
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_weighted_grade_rankings (' +
+          'group_name VARCHAR(60) NOT NULL, owner_key CHAR(64) NOT NULL, ' +
+          'semester VARCHAR(96) NOT NULL, ' +
+          'average_score DECIMAL(5,2) NOT NULL, ' +
+          'score_total DECIMAL(12,3) NOT NULL, ' +
+          'total_weight DECIMAL(12,3) NOT NULL, ' +
+          'subject_count SMALLINT UNSIGNED NOT NULL, ' +
+          'updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, ' +
+          'PRIMARY KEY(group_name,owner_key), ' +
+          'INDEX idx_weighted_group(group_name,semester,average_score)' +
+          ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
+        await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_profile_avatars (' +
+          'actor_key CHAR(64) NOT NULL PRIMARY KEY, ' +
+          'group_name VARCHAR(60) NOT NULL, ' +
+          'roster_key CHAR(64) NULL, ' +
+          'avatar_id CHAR(36) NOT NULL UNIQUE, ' +
+          'mime VARCHAR(24) NOT NULL, image_data LONGBLOB NOT NULL, ' +
+          'updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, ' +
+          'INDEX idx_profile_avatar_roster(group_name,roster_key)' +
+          ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
         await this.db.query(
           'CREATE TABLE IF NOT EXISTS campus_attendance_audit (' +
           'id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, ' +
@@ -256,37 +281,51 @@ export class AttendanceService {
       throw new BadRequestException('Неверный семестр');
     }
     if (!Array.isArray(dto.subjects) ||
-        dto.subjects.length < 1 || dto.subjects.length > 40) {
+        dto.subjects.length < 1 || dto.subjects.length > 400) {
       throw new BadRequestException('Нужны баллы хотя бы по одному предмету');
     }
     const names = new Set<string>();
-    let sum = 0;
+    let weightedTotal = 0;
+    let totalWeight = 0;
     for (const subject of dto.subjects) {
       const name = this.clean(subject.name).toLocaleLowerCase('ru-RU');
-      const value = subject.points;
+      const mark = subject.points;
+      const weight = subject.weight;
       if (!name || name.length > 180 || names.has(name) ||
-          typeof value !== 'number' || !Number.isFinite(value) ||
-          value < 0 || value > 100 ||
-          Math.round(value * 100) / 100 !== value) {
-        throw new BadRequestException('Некорректные или повторяющиеся баллы');
+          typeof mark !== 'number' || !Number.isFinite(mark) ||
+          mark < 2 || mark > 5 ||
+          Math.round(mark * 100) / 100 !== mark ||
+          typeof weight !== 'number' || !Number.isFinite(weight) ||
+          weight <= 0 || weight > 100 ||
+          Math.round(weight * 1000) / 1000 !== weight) {
+        throw new BadRequestException('Некорректная оценка или её вес');
       }
       names.add(name);
-      sum += value;
+      weightedTotal += mark * weight;
+      totalWeight += weight;
     }
-    const scoreTotal = Math.round(sum * 100) / 100;
-    const averageScore = Math.round(sum / dto.subjects.length * 100) / 100;
+    if (totalWeight <= 0) {
+      throw new BadRequestException('Не найдено корректных весов оценок');
+    }
+    const scoreTotal = Math.round(weightedTotal * 1000) / 1000;
+    const averageScore = Math.round(weightedTotal / totalWeight * 100) / 100;
     await this.db.query(
-      'INSERT INTO campus_grade_rankings ' +
-      '(group_name,owner_key,semester,average_score,score_total,subject_count) ' +
-      'VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE ' +
+      'INSERT INTO campus_weighted_grade_rankings ' +
+      '(group_name,owner_key,semester,average_score,score_total,total_weight,subject_count) ' +
+      'VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE ' +
       'semester=VALUES(semester),average_score=VALUES(average_score),' +
-      'score_total=VALUES(score_total),subject_count=VALUES(subject_count),' +
-      'updated_at=CURRENT_TIMESTAMP',
+      'score_total=VALUES(score_total),total_weight=VALUES(total_weight),' +
+      'subject_count=VALUES(subject_count),updated_at=CURRENT_TIMESTAMP',
       [actor.group, mine, semester, averageScore, scoreTotal,
-        dto.subjects.length],
+        Math.round(totalWeight * 1000) / 1000, dto.subjects.length],
+    );
+    await this.db.query(
+      'UPDATE campus_profile_avatars SET group_name=?, roster_key=? ' +
+      'WHERE actor_key=?', [actor.group, mine, actor.ownerKey],
     );
     return {published:true, semester, subjectCount:dto.subjects.length,
-      scoreTotal, averageScore, source:'participant_submitted'};
+      scoreTotal, totalWeight, averageScore,
+      metric:'weighted_control_grades_2_5', source:'participant_submitted'};
   }
 
   async withdrawBarsScore(actor: AttendanceIdentity) {
@@ -296,7 +335,7 @@ export class AttendanceService {
       return {withdrawn:true};
     }
     await this.db.query(
-      'DELETE FROM campus_grade_rankings WHERE group_name=? AND owner_key=?',
+      'DELETE FROM campus_weighted_grade_rankings WHERE group_name=? AND owner_key=?',
       [actor.group, mine],
     );
     return {withdrawn:true};
@@ -328,12 +367,12 @@ export class AttendanceService {
       filterParams,
     ) as Array<{total:number|string}>;
     const ownRows = mine ? await this.db.query(
-      'SELECT semester FROM campus_grade_rankings ' +
+      'SELECT semester FROM campus_weighted_grade_rankings ' +
       'WHERE group_name=? AND owner_key=? LIMIT 1',
       [actor.group, mine],
     ) as Array<{semester:string}> : [];
     const newest = await this.db.query(
-      'SELECT gr.semester FROM campus_grade_rankings gr ' +
+      'SELECT gr.semester FROM campus_weighted_grade_rankings gr ' +
       'JOIN campus_attendance_roster r ON r.group_name=gr.group_name ' +
       'AND r.owner_key=gr.owner_key AND r.active=1 ' +
       'WHERE EXISTS (SELECT 1 FROM campus_attendance_roster_sync rs ' +
@@ -345,13 +384,15 @@ export class AttendanceService {
     if (!semester) return {scope, group:actor.group, semester:null,
       total:Number(rosterCount?.total ?? 0), participants:0,
       myPlace:null, myAverage:null, published:false, entries:[],
-      source:'participant_submitted'};
+      metric:'weighted_control_grades_2_5',source:'participant_submitted'};
     const entries = await this.db.query(
       'SELECT gr.owner_key, gr.group_name, r.display_name, ' +
-      'gr.average_score, gr.subject_count, gr.score_total ' +
-      'FROM campus_grade_rankings gr JOIN campus_attendance_roster r ' +
+      'gr.average_score, gr.subject_count, gr.score_total, a.avatar_id ' +
+      'FROM campus_weighted_grade_rankings gr JOIN campus_attendance_roster r ' +
       'ON r.group_name=gr.group_name AND r.owner_key=gr.owner_key ' +
       'AND r.active=1 ' +
+      'LEFT JOIN campus_profile_avatars a ' +
+      'ON a.roster_key=gr.owner_key AND a.group_name=gr.group_name ' +
       'WHERE gr.semester=? AND ' + groupFilter +
       ' AND EXISTS (SELECT 1 FROM campus_attendance_roster_sync rs ' +
       'WHERE rs.group_name=r.group_name) ' +
@@ -360,7 +401,7 @@ export class AttendanceService {
     ) as Array<{
       owner_key:string; group_name:string; display_name:string;
       average_score:string|number; subject_count:string|number;
-      score_total:string|number;
+      score_total:string|number; avatar_id:string|null;
     }>;
     let previousScore: number | null = null;
     let currentPlace = 0;
@@ -376,6 +417,7 @@ export class AttendanceService {
         group: entry.group_name,
         averageScore: score,
         subjectCount: Number(entry.subject_count),
+        avatarId: entry.avatar_id ?? null,
         mine: !!mine && entry.owner_key === mine &&
           entry.group_name === actor.group,
       };
@@ -389,7 +431,7 @@ export class AttendanceService {
       myAverage:own?.averageScore ?? null,
       published:!!own,
       entries:leaderboard,
-      source:'participant_submitted',
+      metric:'weighted_control_grades_2_5',source:'participant_submitted',
     };
   }
 

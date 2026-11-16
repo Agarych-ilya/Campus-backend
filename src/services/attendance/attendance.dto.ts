@@ -108,15 +108,17 @@ export class BarsRankingSubjectDto {
   @IsString() @IsNotEmpty() @MaxLength(180)
   name!: string;
 
-  @IsNumber({maxDecimalPlaces: 2}) @Min(0) @Max(100)
+  @IsNumber({maxDecimalPlaces: 2}) @Min(2) @Max(5)
   points!: number;
+  @IsNumber({maxDecimalPlaces: 3}) @Min(0.001) @Max(100)
+  weight!: number;
 }
 
 export class PublishBarsRankingDto {
   @IsString() @IsNotEmpty() @MaxLength(96)
   semester!: string;
 
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(40)
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(400)
   @ValidateNested({each:true}) @Type(() => BarsRankingSubjectDto)
   subjects!: BarsRankingSubjectDto[];
 }
