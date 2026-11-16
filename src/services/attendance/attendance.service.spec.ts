@@ -156,6 +156,111 @@ describe('BARS attendance - verified group and review workflow', () => {
       String(sql).startsWith('INSERT INTO campus_attendance_audit'))).toBe(true);
   });
 
+  test('academic points ranking requires explicit opt-in and verified roster',
+    async () => {
+    const submissions: any[] = [];
+    query.mockImplementation(async (sql: string, values?: unknown[]) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r')) {
+        return [{owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT group_name FROM campus_attendance_roster_verified')) {
+        return [{group_name: group}];
+      }
+      if (sql.startsWith('INSERT INTO campus_grade_rankings')) {
+        submissions.push(values);
+        return {affectedRows:1};
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows:1};
+    });
+    const payload = {
+      semester: '2026/2027 осенний',
+      subjects: [
+        {name: 'Математика', points: 72},
+        {name: 'Физика', points: 88},
+      ],
+    };
+    await expect(api.publishBarsScore(student, payload)).resolves.toEqual({
+      published: true, semester: '2026/2027 осенний',
+      subjectCount: 2, scoreTotal: 160, averageScore: 80,
+      source: 'participant_submitted',
+    });
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0]).toEqual([
+      group, classmate, payload.semester, 80, 160, 2,
+    ]);
+    await expect(api.publishBarsScore(student, {
+      ...payload,
+      subjects: [
+        {name: 'Математика', points: 80},
+        {name: 'Математика', points: 80},
+      ],
+    })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  test('A-prefixed stream groups only and rank by submitted academic points',
+    async () => {
+    const other = 'c'.repeat(64);
+    query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r')) {
+        return [{owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT COUNT(*) AS total FROM campus_attendance_roster r')) {
+        expect(sql).toContain("r.group_name LIKE 'А-%'");
+        return [{total: 39}];
+      }
+      if (sql.startsWith('SELECT semester FROM campus_grade_rankings')) {
+        return [{semester:'2026/2027 осенний'}];
+      }
+      if (sql.startsWith('SELECT gr.semester FROM campus_grade_rankings')) {
+        expect(sql).toContain("r.group_name LIKE 'А-%'");
+        return [{semester:'2026/2027 осенний'}];
+      }
+      if (sql.startsWith('SELECT gr.owner_key, gr.group_name')) {
+        expect(sql).toContain("gr.semester=?");
+        expect(params).toEqual(['2026/2027 осенний']);
+        return [
+          {owner_key:other, group_name:'А-01-23',
+            display_name:'Другой участник', average_score:90,
+            subject_count:4, score_total:360},
+          {owner_key:classmate, group_name:group,
+            display_name:'Студент', average_score:80,
+            subject_count:2, score_total:160},
+        ];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows:1};
+    });
+    const results = await api.barsScoresRanking(student, 'stream');
+    expect(results).toMatchObject({
+      scope:'stream', group, semester:'2026/2027 осенний',
+      total:39, participants:2, myPlace:2,
+      myAverage:80, published:true, source:'participant_submitted',
+    });
+    expect(results.entries.map((entry: any) => entry.place)).toEqual([1,2]);
+    expect(JSON.stringify(results)).not.toContain(classmate);
+    expect(JSON.stringify(results)).not.toContain(other);
+    await expect(api.barsScoresRanking(student, 'anywhere'))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  test('unverified roster cannot publish grades', async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r'))
+        return [{owner_key:classmate}];
+      if (sql.startsWith('SELECT group_name FROM campus_attendance_roster_verified'))
+        return [];
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows:1};
+    });
+    await expect(api.publishBarsScore(student, {
+      semester:'2026/2027 осенний',
+      subjects:[{name:'Физика', points:75}],
+    })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_grade_rankings'))).toBe(false);
+  });
+
   test('personal ranking requires a verified imported roster and own identity',
     async () => {
     const personalActor = {
