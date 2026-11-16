@@ -303,6 +303,11 @@ export class AttendanceService {
     await this.ensureSchema();
     const mine = await this.ownRosterKey(actor);
     const stream = scope === 'stream';
+    if (stream && !actor.group.startsWith('А-')) {
+      throw new ForbiddenException(
+        'Рейтинг потока доступен только студентам групп А-',
+      );
+    }
     // All and only A-... groups comprise the user-requested stream.
     // Other groups remain excluded even if their snapshots exist.
     const groupFilter = stream
