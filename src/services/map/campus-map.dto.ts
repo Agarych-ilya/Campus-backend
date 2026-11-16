@@ -1,4 +1,4 @@
-import { IsIn, IsLatitude, IsLongitude, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsIn, IsNumber, Max, Min, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export const MAP_MARKER_KINDS = ['building', 'library', 'sports', 'culture', 'service', 'other'] as const;
 export type MapMarkerKind = (typeof MAP_MARKER_KINDS)[number];
@@ -16,10 +16,10 @@ export class CreateMapMarkerDto {
   @IsIn(MAP_MARKER_KINDS)
   kind!: MapMarkerKind;
 
-  @IsLatitude()
+  @IsNumber() @Min(-90) @Max(90)
   latitude!: number;
 
-  @IsLongitude()
+  @IsNumber() @Min(-180) @Max(180)
   longitude!: number;
 }
 
@@ -36,9 +36,9 @@ export class UpdateMapMarkerDto {
   @IsOptional() @IsIn(MAP_MARKER_KINDS)
   kind?: MapMarkerKind;
 
-  @IsOptional() @IsLatitude()
+  @IsOptional() @IsNumber() @Min(-90) @Max(90)
   latitude?: number;
 
-  @IsOptional() @IsLongitude()
+  @IsOptional() @IsNumber() @Min(-180) @Max(180)
   longitude?: number;
 }
