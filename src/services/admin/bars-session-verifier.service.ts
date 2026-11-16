@@ -262,6 +262,57 @@ export class BarsSessionVerifier {
     }
   }
 
+  /** Candidate university groups listed for the currently signed-in
+   * account. Listing a group is NOT proof the user is its headman.
+   * Every requested group must pass verifyStarosta before its data is opened.
+   */
+  async discoverGroupCandidates(cookies: string): Promise<string[]> {
+    const [menuHtml, listHtml] = await Promise.all([
+      this.fetchBars('/bars_web/Auth/Menu', cookies),
+      this.fetchBars('/bars_web/SG/StudyGroup/ListStudyGroup', cookies),
+    ]);
+    const menu = cheerio.load(menuHtml);
+    const links = menu('a[href]').toArray();
+    const menuHasGroups = links.some(el => {
+      const href = menu(el).attr('href') ?? '';
+      try {
+        const url = new URL(href, this.origin);
+        return url.origin === this.origin &&
+          url.pathname === '/bars_web/SG/StudyGroup/ListStudyGroup' &&
+          /учебные группы/i.test(menu(el).text());
+      } catch { return false; }
+    });
+    if (!menuHasGroups) return [];
+
+    const $ = cheerio.load(listHtml);
+    const groups = new Set<string>();
+    $('a[href]').each((_,el) => {
+      const title = $(el).text().trim().toUpperCase()
+        .replace(/A/g, 'А').replace(/[–—−]/g, '-')
+        .replace(/\s+/g, '');
+      if (!/^[А-ЯЁ0-9]+(?:-[А-ЯЁ0-9]+){1,3}$/.test(title) ||
+          title.length > 40) return;
+      try {
+        const url = new URL($(el).attr('href') ?? '',this.origin);
+        if (url.origin !== this.origin || url.username || url.password ||
+            url.hash ||
+            url.pathname !== '/bars_web/SG/StudyGroup/EditStudyGroup' ||
+            [...url.searchParams.keys()].some(key => key !== 'sgID')) return;
+        const ids = url.searchParams.getAll('sgID');
+        if (ids.length !== 1 ||
+            !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
+              .test(ids[0])) return;
+        groups.add(title);
+      } catch { /* Only fixed BARS same-origin links are accepted. */ }
+    });
+    if (groups.size > 300) {
+      throw new ServiceUnavailableException(
+        'БАРС вернул слишком много учебных групп',
+      );
+    }
+    return [...groups].sort((a,b) => a.localeCompare(b,'ru'));
+  }
+
   /** BARS menu identifies the signed-in university account (not a
    * username supplied by the phone). Only opaque HMAC is stored in session.
    */
