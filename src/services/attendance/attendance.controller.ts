@@ -7,6 +7,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import type { Response } from 'express';
 import { attendanceIdentity, AttendanceGuard } from './attendance.guard';
+import type { AttendanceIdentity } from './attendance.guard';
 import { AttendanceService } from './attendance.service';
 import { BarsSessionVerifier } from '../admin/bars-session-verifier.service';
 import { ListingsService } from '../listings/listings.service';
@@ -18,6 +19,8 @@ import {
   AttendanceMemberDto, AttendanceOpenLessonDto,
   AttendanceRosterImportDto, AttendanceAbsencesDto,
   AttendanceCorrectionDto, PublishBarsRankingDto,
+  AttendanceManagedGroupDto, AttendanceReportQueryDto,
+  AttendanceRosterSyncDto,
 } from './attendance.dto';
 
 const validate = new ValidationPipe({
@@ -121,10 +124,107 @@ export class AttendanceController {
     return this.service.personalAttendanceRank(req.attendanceIdentity);
   }
 
+  /** A group only appears as editable after an independent BARS headman
+   * check, not just because it is linked from a university menu.
+   */
+  private scopedActor(req: any, selected?: string): AttendanceIdentity {
+    const actor = req.attendanceIdentity as AttendanceIdentity;
+    const group = selected
+      ? normalizedStudyGroup(selected) : actor.group;
+    if (group === actor.group && actor.isStarosta) return actor;
+    if (!(actor.managedGroups ?? []).includes(group)) {
+      throw new ForbiddenException('Нет подтверждённых прав на эту группу');
+    }
+    return {...actor, group, isStarosta: true};
+  }
+
+  private requirePrivateBarsTransport(req: any) {
+    const peer = req.socket?.remoteAddress ?? '';
+    if (!req.secure &&
+        !['127.0.0.1','::1','::ffff:127.0.0.1'].includes(peer)) {
+      throw new ForbiddenException('Для сессии БАРС нужен HTTPS');
+    }
+  }
+
+  private async checkOwnBarsAccount(req: any, cookies: string) {
+    this.requirePrivateBarsTransport(req);
+    const actor = req.attendanceIdentity as AttendanceIdentity;
+    const verified = await this.barsVerifier.verify(cookies);
+    if (ListingsService.ownerKey(
+          normalizeBarsRecordBook(verified.recordBook)) !== actor.ownerKey ||
+        normalizedStudyGroup(verified.group ?? '') !== actor.group) {
+      throw new ForbiddenException('Сессия БАРС принадлежит другому студенту');
+    }
+  }
+
+  @Get('managed-groups')
+  @UseGuards(AttendanceGuard)
+  managedGroups(@Req() req: any) {
+    const actor = req.attendanceIdentity as AttendanceIdentity;
+    return {group: actor.group, isStarosta: actor.isStarosta,
+      groups:actor.managedGroups ?? []};
+  }
+
+  /** No automatic network polling: the user explicitly requests discovery. */
+  @Post('managed-groups/discover')
+  @UseGuards(AttendanceGuard) @UsePipes(validate)
+  async discoverManagedGroups(@Req() req: any, @Body() dto: BarsListingLoginDto) {
+    await this.checkOwnBarsAccount(req,dto.cookieHeader);
+    return {
+      candidates: await this.barsVerifier.discoverGroupCandidates(dto.cookieHeader),
+    };
+  }
+
+  /** Never trust a candidate list as evidence of headman privileges. */
+  @Post('managed-groups/verify')
+  @UseGuards(AttendanceGuard) @UsePipes(validate)
+  async verifyManagedGroup(
+    @Req() req: any, @Body() dto: AttendanceManagedGroupDto,
+  ) {
+    await this.checkOwnBarsAccount(req,dto.cookieHeader);
+    const group = normalizedStudyGroup(dto.group);
+    const candidates = await this.barsVerifier
+      .discoverGroupCandidates(dto.cookieHeader);
+    if (!candidates.includes(group) ||
+        !await this.barsVerifier.verifyStarosta(dto.cookieHeader,group)) {
+      throw new ForbiddenException(
+        'БАРС не подтвердил права старосты этой группы',
+      );
+    }
+    const actor = req.attendanceIdentity as AttendanceIdentity;
+    const current = req.session.listingManagedGroupsVerifiedAt ===
+        req.session.listingVerifiedAt &&
+      Array.isArray(req.session.listingManagedGroups)
+        ? req.session.listingManagedGroups : [];
+    req.session.listingManagedGroups = [...new Set([
+      ...current.filter((x: unknown) => typeof x === 'string'),
+      group,
+    ])].slice(0,40);
+    req.session.listingManagedGroupsVerifiedAt =
+      req.session.listingVerifiedAt;
+    await new Promise<void>((resolve,reject) =>
+      req.session.save((error: Error | null) =>
+        error ? reject(error) : resolve()));
+    return {
+      group,
+      groups: [
+        ...new Set([...(actor.managedGroups ?? []),group]),
+      ].sort((a,b) => a.localeCompare(b,'ru')),
+    };
+  }
+
   @Get('roster')
   @UseGuards(AttendanceGuard)
-  roster(@Req() req: any) {
-    return this.service.roster(req.attendanceIdentity);
+  roster(@Req() req: any, @Query('group') group?: string) {
+    return this.service.roster(this.scopedActor(req,group));
+  }
+
+  @Get('reports')
+  @UseGuards(AttendanceGuard) @UsePipes(validate)
+  report(@Req() req: any, @Query() dto: AttendanceReportQueryDto) {
+    return this.service.attendanceReport(
+      this.scopedActor(req,dto.group),dto.from,dto.to,
+    );
   }
 
   /** Re-synchronize a previously logged-in starosta, without opening a
@@ -132,22 +232,15 @@ export class AttendanceController {
    */
   @Post('roster/sync')
   @UseGuards(AttendanceGuard) @UsePipes(validate)
-  async syncRoster(@Req() req: any, @Body() dto: BarsListingLoginDto) {
-    const actor = req.attendanceIdentity;
-    if (!actor.isStarosta) {
-      throw new ForbiddenException('Только староста может обновить список');
+  async syncRoster(@Req() req: any, @Body() dto: AttendanceRosterSyncDto) {
+    const actor = this.scopedActor(req,dto.group);
+    await this.checkOwnBarsAccount(req,dto.cookieHeader);
+    // An additional group must be rechecked at the actual BARS source.
+    if (actor.group !== req.attendanceIdentity.group &&
+        !await this.barsVerifier.verifyStarosta(dto.cookieHeader,actor.group)) {
+      throw new ForbiddenException('БАРС больше не подтверждает права старосты');
     }
-    const peer = req.socket?.remoteAddress ?? '';
-    const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer);
-    if (!req.secure && !local) {
-      throw new ForbiddenException('Для передачи сессии БАРС нужен HTTPS');
-    }
-    const verified = await this.barsVerifier.verify(dto.cookieHeader);
-    if (ListingsService.ownerKey(normalizeBarsRecordBook(verified.recordBook)) !==
-        actor.ownerKey || normalizedStudyGroup(verified.group ?? '') !== actor.group) {
-      throw new ForbiddenException('Сессия БАРС принадлежит другому студенту');
-    }
-    return this.service.syncFromBars(actor, dto.cookieHeader);
+    return this.service.syncFromBars(actor,dto.cookieHeader);
   }
 
   @Post('roster/import')
