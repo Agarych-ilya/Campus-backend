@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { UnauthorizedException } from '@nestjs/common';
+import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { BarsSessionVerifier } from './bars-session-verifier.service';
 
 describe('BarsSessionVerifier', () => {
@@ -28,9 +28,80 @@ describe('BarsSessionVerifier', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
+  const groupGuid = '11111111-2222-4333-8444-555555555555';
+  const starostaMenu =
+    '<nav><a id="ddMessage"><span class="d-none d-md-inline">' +
+    'public\\PetrovPS</span></a></nav>';
+  const groupsHtml =
+    '<a href="/bars_web/SG/StudyGroup/EditStudyGroup?sgID=' +
+    groupGuid + '">А-03-23</a>';
+  const starostaPage =
+    '<div class="row"><label>Староста</label>' +
+    '<div><input value="Петров Пётр Сергеевич (А-03-23)"></div></div>' +
+    '<table><tbody><tr>' +
+    '<td>public\\PetrovPS</td><td>Петров</td><td>Пётр</td>' +
+    '<td>Сергеевич</td><td><a href="mailto:PetrovPS@mpei.ru">' +
+    'Почта</a></td></tr></tbody></table>';
+
+  it('grants starosta status only when authenticated BARS account matches ' +
+     'the official group starosta field and responsible person', async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({status: 200, data: starostaMenu})
+      .mockResolvedValueOnce({status: 200, data: groupsHtml})
+      .mockResolvedValueOnce({status: 200, data: starostaPage});
+    await expect(verifier.verifyStarosta(
+      'ASP.NET_SessionId=abc123', 'А-03-23',
+    )).resolves.toBe(true);
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(get.mock.calls[2][0]).toBe(
+      'https://bars.mpei.ru/bars_web/SG/StudyGroup/EditStudyGroup?sgID=' +
+      groupGuid,
+    );
+  });
+
+  it('does not grant the role to a journal maintainer who is not starosta',
+      async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({status: 200, data: starostaMenu})
+      .mockResolvedValueOnce({status: 200, data: groupsHtml})
+      .mockResolvedValueOnce({
+        status: 200,
+        data: starostaPage.replace(
+          'value="Петров Пётр Сергеевич (А-03-23)"',
+          'value="Иванова Елена Петровна (А-03-23)"',
+        ),
+      });
+    await expect(verifier.verifyStarosta(
+      'ASP.NET_SessionId=abc123', 'А-03-23',
+    )).resolves.toBe(false);
+  });
+
+  it('does not grant the role from a forged student-supplied BARS group link',
+      async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({status: 200, data: starostaMenu})
+      .mockResolvedValueOnce({status: 200, data:
+        groupsHtml.replace('/bars_web/SG/StudyGroup/EditStudyGroup',
+          'https://another.example/SG/StudyGroup/EditStudyGroup')});
+    await expect(verifier.verifyStarosta(
+      'ASP.NET_SessionId=abc123', 'А-03-23',
+    )).resolves.toBe(false);
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads verified account login only from authenticated BARS menu', async () => {
+    get.mockReset();
+    get.mockResolvedValueOnce({status: 200, data: starostaMenu});
+    await expect(verifier.verifyAccountLogin('ASP.NET_SessionId=abc123'))
+      .resolves.toBe('petrovps');
+    expect(get.mock.calls[0][0]).toBe(
+      'https://bars.mpei.ru/bars_web/Auth/Menu',
+    );
+  });
+
   it('fetches protected BARS pages itself and verifies the same record book', async () => {
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-      .resolves.toEqual({ recordBook: '123456', group: 'А-03-23' });
+      .resolves.toMatchObject({ recordBook: '123456', group: 'А-03-23' });
 
     expect(get).toHaveBeenCalledTimes(2);
     const [url, options] = get.mock.calls[0];
@@ -67,7 +138,7 @@ describe('BarsSessionVerifier', () => {
       get.mockResolvedValueOnce({ status: 200, data: studentPage });
 
       await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-        .resolves.toEqual({ recordBook: '123456', group: 'А-03-23' });
+        .resolves.toMatchObject({ recordBook: '123456', group: 'А-03-23' });
       expect(get.mock.calls[1][0]).toBe(expectedUrl);
     },
   );
@@ -86,7 +157,7 @@ describe('BarsSessionVerifier', () => {
         '<span class="fw-bold">А-03-23</span></div></div>',
     });
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-      .resolves.toEqual({ recordBook: '123456', group: 'А-03-23' });
+      .resolves.toMatchObject({ recordBook: '123456', group: 'А-03-23' });
     expect(get.mock.calls[1][0]).toBe(
       'https://bars.mpei.ru/bars_web/ST_Study/Main/Main?studentID=' + id,
     );
@@ -101,7 +172,7 @@ describe('BarsSessionVerifier', () => {
     get.mockResolvedValueOnce({ status: 200, data: html });
     get.mockResolvedValueOnce({ status: 200, data: studentPage });
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-      .resolves.toEqual({ recordBook: '123456', group: 'А-03-23' });
+      .resolves.toMatchObject({ recordBook: '123456', group: 'А-03-23' });
     expect(get).toHaveBeenCalledTimes(2);
   });
 
@@ -115,7 +186,7 @@ describe('BarsSessionVerifier', () => {
         '<span class="fw-bold">А-09-23</span></div>',
     });
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-      .resolves.toEqual({recordBook: '123456', group: undefined});
+      .resolves.toMatchObject({recordBook: '123456', group: undefined});
   });
 
   it('never trusts an unrecognized group format for notes', async () => {
@@ -124,7 +195,7 @@ describe('BarsSessionVerifier', () => {
       data: studentList.replace('<td>А-03-23</td>', '<td>Неизвестно</td>')});
     get.mockResolvedValueOnce({status: 200, data: studentPage});
     await expect(verifier.verify('ASP.NET_SessionId=abc123'))
-      .resolves.toEqual({recordBook: '123456', group: undefined});
+      .resolves.toMatchObject({recordBook: '123456', group: undefined});
   });
 
   it('rejects multiple profile links referring to different students', async () => {
@@ -209,11 +280,92 @@ describe('BarsSessionVerifier', () => {
     expect(get).not.toHaveBeenCalled();
   });
 
+  it('follows only one canonical same-origin redirect without leaking cookies',
+      async () => {
+    get.mockReset();
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ERR_BAD_RESPONSE',
+      response: {status: 302, headers: {
+        location: '/bars_web/ST/Student/ListStudent/',
+      }},
+    });
+    get.mockResolvedValueOnce({status: 200, data: studentList});
+    get.mockResolvedValueOnce({status: 200, data: studentPage});
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .resolves.toMatchObject({recordBook: '123456'});
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(get.mock.calls[1][0])
+      .toBe('https://bars.mpei.ru/bars_web/ST/Student/ListStudent/');
+    expect(get.mock.calls[1][1].headers.Cookie)
+      .toBe('ASP.NET_SessionId=abc123');
+  });
+
+  it.each([
+    ['external', 'https://evil.example/login'],
+    ['other BARS page', '/bars_web/ST/Student/OtherStudent'],
+    ['BARS login', '/bars_web/Auth/Login'],
+    ['BARS login with ReturnURL',
+      '/bars_web/?ReturnURL=%2Fbars_web%2FST%2FStudent%2FListStudent'],
+    ['BARS login with case-insensitive ReturnUrl',
+      '/bars_web/?returnUrl=https%3A%2F%2Fbars.mpei.ru%2Fbars_web%2FST%2FStudent%2FListStudent'],
+    ['loop', '/bars_web/ST/Student/ListStudent'],
+  ])('refuses %s redirect without fetching its target',
+      async (_, location) => {
+    get.mockReset();
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ERR_BAD_RESPONSE',
+      response: {status: 302, headers: {location}},
+    });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies BARS root with ReturnURL as login, never a canonical URL',
+      async () => {
+    get.mockReset();
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ERR_BAD_RESPONSE',
+      response: {
+        status: 302,
+        headers: {location: '/bars_web/?ReturnURL=%2Fbars_web%2FST%2FStudent%2FListStudent'},
+      },
+    });
+    await expect(verifier.verify('ASP.NET_SessionId=stale'))
+      .rejects.toThrow(/Повтори вход в БАРС на телефоне/);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects expired sessions that redirect to the login page', async () => {
     get.mockReset();
-    get.mockRejectedValueOnce(new Error('302 Found'));
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ERR_BAD_RESPONSE',
+      response: {status: 302},
+    });
     await expect(verifier.verify('ASP.NET_SessionId=expired'))
       .rejects.toBeInstanceOf(UnauthorizedException);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('distinguishes temporary BARS outage from an expired student session',
+      async () => {
+    get.mockReset();
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ERR_BAD_RESPONSE',
+      response: {status: 503},
+    });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a service error when the BARS host cannot be reached', async () => {
+    get.mockReset();
+    get.mockRejectedValueOnce({
+      isAxiosError: true, code: 'ETIMEDOUT',
+    });
+    await expect(verifier.verify('ASP.NET_SessionId=abc123'))
+      .rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   it('refuses a public login page even when it responds with HTTP 200', async () => {

@@ -10,6 +10,7 @@ import type { Response } from 'express';
 
 import { normalizeBarsRecordBook } from '../../auth/admin_identity';
 import { BarsSessionVerifier } from '../admin/bars-session-verifier.service';
+import { rosterIdentityHash } from '../attendance/attendance-identity';
 import {
   BarsListingLoginDto, CreateListingDto, ListingReportDto, UpdateListingDto,
 } from './listings.dto';
@@ -72,6 +73,14 @@ export class ListingsController {
       );
     }
     const verified = await this.bars.verify(dto.cookieHeader);
+    // The official role is verified from the authenticated BARS group page.
+    // It is never accepted from a Flutter-provided isStarosta flag.
+    // Independent checks: perform them concurrently rather than waiting for
+    // menu/profile verification before starting the group-role verification.
+    const [verifiedStarosta, verifiedLogin] = await Promise.all([
+      this.bars.verifyStarosta(dto.cookieHeader, verified.group),
+      this.bars.verifyAccountLogin(dto.cookieHeader),
+    ]);
     const key = ListingsService.ownerKey(
       normalizeBarsRecordBook(verified.recordBook),
     );
@@ -97,13 +106,29 @@ export class ListingsController {
     req.session.listingOwnerKey = key;
     // Group comes only from the verified BARS student row.
     req.session.listingGroup = verified.group ?? null;
+    req.session.listingRosterStudentHash = verified.group
+      ? rosterIdentityHash(verified.group, 'student', verified.studentId)
+      : null;
+    req.session.listingRosterLoginHash = verified.group
+      ? rosterIdentityHash(verified.group, 'login', verifiedLogin)
+      : null;
     req.session.listingVerifiedAt = Date.now();
+    req.session.listingStarostaGroup =
+      verifiedStarosta ? verified.group ?? null : null;
+    req.session.listingStarostaVerifiedAt =
+      verifiedStarosta ? req.session.listingVerifiedAt : null;
     req.session.listingCsrf = randomBytes(32).toString('hex');
     await new Promise<void>((resolve, reject) =>
       req.session.save((error: Error | null) =>
         error ? reject(error) : resolve()),
     );
+    // Never block CampusApp startup on Playwright or a large BARS table.
+    // The timetable's non-blocking roster check calls /attendance/roster
+    // and then /attendance/roster/sync only if the group is not yet imported.
+    // This also avoids fetching the same BARS roster at EVERY login.
+    // The verified group and role above remain mandatory for either endpoint.
     return {
+      rosterSync: verifiedStarosta ? 'deferred' : 'not_starosta',
       authenticated: true,
       csrfToken: req.session.listingCsrf,
       group: req.session.listingGroup,

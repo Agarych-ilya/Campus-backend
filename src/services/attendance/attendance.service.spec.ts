@@ -1,0 +1,674 @@
+import {
+  BadRequestException, ConflictException, ForbiddenException,
+} from '@nestjs/common';
+import { DbService } from '../../db.service';
+import { ScheduleService } from '../../schedule/schedule.service';
+import { ListingsService } from '../listings/listings.service';
+import { attendanceIdentity } from './attendance.guard';
+import { rosterIdentityHash } from './attendance-identity';
+import { AttendanceService } from './attendance.service';
+
+const oldSecret = process.env.SESSION_SECRET;
+const oldRoles = process.env.CAMPUS_STAROSTA_GROUP_BOOKS;
+
+describe('BARS attendance - verified group and review workflow', () => {
+  const group = 'А-03-23';
+  const owner = 'a'.repeat(64);
+  const classmate = 'b'.repeat(64);
+  const actor = { ownerKey: owner, group, isStarosta: true };
+  const student = { ownerKey: classmate, group, isStarosta: false };
+  const lesson = {
+    id: 8, group_name: group, lesson_date: '2026-11-14',
+    lesson_time: '10:00–11:30', subject: 'Теория управления',
+    lesson_type: 'Лекция', room: 'В-308',
+    state: 'open', created_by: owner,
+  };
+
+  let query: jest.Mock;
+  let api: AttendanceService;
+  let schedule: { getSchedule: jest.Mock };
+  let fetchRoster: jest.Mock;
+
+  beforeEach(() => {
+    query = jest.fn(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_attendance_lessons')) {
+        return [lesson];
+      }
+      if (sql.startsWith('SELECT state FROM campus_attendance_lessons')) {
+        return [{state: 'open'}];
+      }
+      if (sql.startsWith(
+        'SELECT owner_key,display_name FROM campus_attendance_roster')) {
+        return [
+          {owner_key: owner, display_name: 'Староста'},
+          {owner_key: classmate, display_name: 'Студент'},
+        ];
+      }
+      if (sql.startsWith('SELECT owner_key,display_name FROM campus_attendance_students')) {
+        return [
+          {owner_key: owner, display_name: 'Староста'},
+          {owner_key: classmate, display_name: 'Студент'},
+        ];
+      }
+      if (sql.startsWith('SELECT owner_key,status,note,updated_at')) {
+        return [{owner_key: classmate, status: 'pending', note: null}];
+      }
+      if (sql.startsWith('SELECT owner_key FROM campus_attendance_students')) {
+        return [{owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT status FROM campus_attendance_entries')) return [];
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1, insertId: 8};
+    });
+    schedule = {
+      getSchedule: jest.fn(async () => ({
+        lessons: [{
+          date: '14.11.2026',
+          time: '10:00–11:30',
+          subject: 'Теория управления',
+          type: 'Лекция',
+          room: 'В-308',
+        }],
+      })),
+    };
+    const withTransaction = jest.fn(async (callback) =>
+      callback({execute: async (sql: string, params: unknown[]) =>
+        [await query(sql, params), []]}));
+    fetchRoster = jest.fn();
+    api = new AttendanceService(
+      {query, withTransaction} as unknown as DbService,
+      schedule as unknown as ScheduleService,
+      {fetch: fetchRoster} as unknown as import('./bars-roster-fetcher.service').BarsRosterFetcher,
+    );
+  });
+
+  afterAll(() => {
+    if (oldSecret === undefined) delete process.env.SESSION_SECRET;
+    else process.env.SESSION_SECRET = oldSecret;
+    if (oldRoles === undefined) delete process.env.CAMPUS_STAROSTA_GROUP_BOOKS;
+    else process.env.CAMPUS_STAROSTA_GROUP_BOOKS = oldRoles;
+  });
+
+  test('starosta permission comes from verified record book, not app claims', () => {
+    process.env.SESSION_SECRET = 's'.repeat(48);
+    process.env.CAMPUS_STAROSTA_GROUP_BOOKS = 'А-03-23=123ABC';
+    const ownerKey = ListingsService.ownerKey('123ABC');
+    const normal = {
+      listingOwnerKey: ownerKey, listingGroup: 'A-03-23',
+      listingVerifiedAt: Date.now(),
+    };
+    expect(attendanceIdentity(normal)?.isStarosta).toBe(true);
+    expect(attendanceIdentity({...normal, listingGroup: 'А-02-23'})?.isStarosta)
+      .toBe(false);
+    expect(attendanceIdentity({...normal, listingVerifiedAt: 0})).toBeNull();
+    expect(attendanceIdentity({...normal, listingOwnerKey: 'invalid'})).toBeNull();
+  });
+
+  test('BARS-proven starosta can edit only their verified group', () => {
+    const key = ListingsService.ownerKey('123ABC');
+    const now = Date.now();
+    const session = {
+      listingOwnerKey: key,
+      listingGroup: 'А-03-23',
+      listingVerifiedAt: now,
+      listingStarostaGroup: 'А-03-23',
+      listingStarostaVerifiedAt: now,
+    };
+    expect(attendanceIdentity(session)?.isStarosta).toBe(true);
+    expect(attendanceIdentity({
+      ...session, listingStarostaGroup: 'А-02-23',
+    })?.isStarosta).toBe(false);
+    expect(attendanceIdentity({
+      ...session, listingStarostaVerifiedAt: now - 1000,
+    })?.isStarosta).toBe(false);
+  });
+
+  test('cannot open journal for lesson not found in real RUZ timetable',
+      async () => {
+    await expect(api.open(actor, {
+      date: '2026-11-14', time: '12:00–13:30',
+      subject: 'Неизвестная пара', type: 'Лекция', room: 'В-308',
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_attendance_lessons'))).toBe(false);
+  });
+
+  test('regular student cannot create official lesson or review classmates',
+      async () => {
+    const item = {
+      date: '2026-11-14', time: '10:00–11:30',
+      subject: 'Теория управления', type: 'Лекция', room: 'В-308',
+    };
+    await expect(api.open(student, item))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    await expect(api.decide(student, 8, {
+      ownerKey: owner, status: 'absent',
+    })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  test('check-in becomes pending and cannot directly mark presence', async () => {
+    const reply = await api.checkIn(student, 8);
+    expect(reply).toEqual({status: 'pending'});
+    expect(query.mock.calls.some(([sql, params]) =>
+      String(sql).startsWith('INSERT INTO campus_attendance_entries') &&
+      params[0] === 8 && params[1] === classmate)).toBe(true);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_attendance_audit'))).toBe(true);
+  });
+
+  test('academic points ranking requires explicit opt-in and verified roster',
+    async () => {
+    const submissions: any[] = [];
+    query.mockImplementation(async (sql: string, values?: unknown[]) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r')) {
+        return [{owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync')) {
+        return [{student_count: 2}];
+      }
+      if (sql.startsWith('INSERT INTO campus_weighted_grade_rankings')) {
+        submissions.push(values);
+        return {affectedRows:1};
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows:1};
+    });
+    const payload = {
+      semester: 'Все семестры',
+      subjects: [
+        {name: 'Математика', points: 5, weight: 30},
+        {name: 'Физика', points: 4, weight: 70},
+      ],
+    };
+    await expect(api.publishBarsScore(student, payload)).resolves.toEqual({
+      published: true, semester: 'Все семестры',
+      subjectCount: 2, scoreTotal: 430, totalWeight: 100, averageScore: 4.3,
+      metric:'weighted_control_grades_2_5', source: 'participant_submitted',
+    });
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0]).toEqual([
+      group, classmate, payload.semester, 4.3, 430, 100, 2,
+    ]);
+    await expect(api.publishBarsScore(student, {
+      ...payload,
+      subjects: [
+        {name: 'Математика', points: 4, weight: 25},
+        {name: 'Математика', points: 4, weight: 25},
+      ],
+    })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  test('starosta with a legacy BARS roster import can publish without reimporting',
+    async () => {
+    const verifiedStarosta = {
+      ...actor, rosterLoginHash: 'd'.repeat(64),
+    };
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r'))
+        return [{owner_key: owner}];
+      // Historical app imports insert roster_sync, but not roster_verified.
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync'))
+        return [{student_count: 13}];
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const result = await api.publishBarsScore(verifiedStarosta, {
+      semester: 'Все семестры',
+      subjects: [{name:'ТАУ', points: 5, weight: 20}],
+    });
+    expect(result).toMatchObject({
+      published: true, subjectCount: 1, scoreTotal: 100, averageScore: 5,
+    });
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_weighted_grade_rankings'))).toBe(true);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes('campus_attendance_roster_verified'))).toBe(false);
+  });
+
+  test('A-prefixed stream groups only and rank by submitted academic points',
+    async () => {
+    const other = 'c'.repeat(64);
+    query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r')) {
+        return [{owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT COUNT(*) AS total FROM campus_attendance_roster r')) {
+        expect(sql).toContain("r.group_name LIKE 'А-%'");
+        return [{total: 39}];
+      }
+      if (sql.startsWith('SELECT semester FROM campus_weighted_grade_rankings')) {
+        return [{semester:'Все семестры'}];
+      }
+      if (sql.startsWith('SELECT gr.semester FROM campus_weighted_grade_rankings')) {
+        expect(sql).toContain("r.group_name LIKE 'А-%'");
+        return [{semester:'Все семестры'}];
+      }
+      if (sql.startsWith('SELECT gr.owner_key, gr.group_name')) {
+        expect(sql).toContain("gr.semester=?");
+        expect(params).toEqual(['Все семестры']);
+        return [
+          {owner_key:other, group_name:'А-01-23',
+            display_name:'Другой участник', average_score:4.8,
+            subject_count:4, score_total:480},
+          {owner_key:classmate, group_name:group,
+            display_name:'Студент', average_score:4.3,
+            subject_count:2, score_total:430},
+        ];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows:1};
+    });
+    const results = await api.barsScoresRanking(student, 'stream');
+    expect(results).toMatchObject({
+      scope:'stream', group, semester:'Все семестры',
+      total:39, participants:2, myPlace:2,
+      myAverage:4.3, published:true,
+      metric:'weighted_control_grades_2_5',source:'participant_submitted',
+    });
+    expect(results.entries.map((entry: any) => entry.place)).toEqual([1,2]);
+    expect(JSON.stringify(results)).not.toContain(classmate);
+    expect(JSON.stringify(results)).not.toContain(other);
+    await expect(api.barsScoresRanking(student, 'anywhere'))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  test('no roster import cannot publish grades', async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r'))
+        return [{owner_key:classmate}];
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync'))
+        return [];
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows:1};
+    });
+    await expect(api.publishBarsScore(student, {
+      semester:'Все семестры',
+      subjects:[{name:'Физика', points:5, weight:20}],
+    })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_weighted_grade_rankings'))).toBe(false);
+  });
+
+  test('server avatar upload saves byte content for only the current actor',
+    async () => {
+    const photo = Buffer.from([0xff,0xd8,0xff,0xe0,0,0,0,0]);
+    const actorWithRoster = {...actor,rosterLoginHash:'d'.repeat(64)};
+    const inserted: unknown[][] = [];
+    query.mockImplementation(async (sql: string,params?: unknown[]) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r'))
+        return [{owner_key: owner}];
+      if (sql.startsWith('INSERT INTO campus_profile_avatars')) {
+        inserted.push(params ?? []);
+        return {affectedRows:1};
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows:1};
+    });
+    const result = await api.uploadProfileAvatar(actorWithRoster, {
+      buffer:photo,
+    } as Express.Multer.File);
+    expect(result.saved).toBe(true);
+    expect(result.avatarId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0][0]).toBe(actor.ownerKey);
+    expect(inserted[0][2]).toBe(owner);
+    expect(inserted[0][4]).toBe('image/jpeg');
+    expect(inserted[0][5]).toEqual(photo);
+    await expect(api.uploadProfileAvatar(actorWithRoster,{
+      buffer:Buffer.from('not an image'),
+    } as Express.Multer.File)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  test('unweighted and invalid marks cannot be published',
+    async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r'))
+        return [{owner_key:classmate}];
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync'))
+        return [{student_count:13}];
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows:1};
+    });
+    for (const payload of [
+      [{name:'ТАУ', points:5, weight:0}],
+      [{name:'ТАУ', points:5.65, weight:40}],
+      [{name:'ТАУ', points:5, weight:101}],
+    ]) {
+      const rejected = api.publishBarsScore(student,{
+        semester:'Все семестры',subjects:payload,
+      });
+      await expect(rejected).rejects.toBeInstanceOf(BadRequestException);
+    }
+  });
+
+  test('personal ranking requires a verified imported roster and own identity',
+    async () => {
+    const personalActor = {
+      ...student, rosterLoginHash: 'd'.repeat(64),
+    };
+    query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync')) {
+        expect(params).toEqual([group]);
+        return [{student_count: 2}];
+      }
+      if (sql.startsWith('SELECT r.owner_key, COUNT(CASE')) {
+        expect(sql).toContain("l.state='closed'");
+        expect(sql).toContain("e.status IN ('present','absent')");
+        return [
+          {owner_key: owner, reviewed_count: 4, present_count: 4},
+          {owner_key: classmate, reviewed_count: 4, present_count: 3},
+        ];
+      }
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster')) {
+        return [{owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const response = await api.personalAttendanceRank(personalActor);
+    expect(response).toEqual({
+      group, imported: true, total: 2,
+      rank: 2, attended: 3, reviewedLessons: 4,
+      metric: 'attendance',
+    });
+    const unknown = await api.personalAttendanceRank(student);
+    expect(unknown.rank).toBeNull();
+    expect(unknown.total).toBe(2);
+    expect(JSON.stringify(response)).not.toContain(owner);
+    expect(JSON.stringify(response)).not.toContain(classmate);
+  });
+
+  test('ranking has no invented place without closed attendance',
+    async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync')) {
+        return [{student_count: 2}];
+      }
+      if (sql.startsWith('SELECT r.owner_key, COUNT(CASE')) {
+        return [
+          {owner_key: owner, reviewed_count: 0, present_count: 0},
+          {owner_key: classmate, reviewed_count: 0, present_count: 0},
+        ];
+      }
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster')) {
+        return [{owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const response = await api.personalAttendanceRank({
+      ...student, rosterLoginHash: 'd'.repeat(64),
+    });
+    expect(response).toMatchObject({
+      imported: true, total: 2, rank: null, reviewedLessons: 0,
+    });
+  });
+
+  test('only starosta can see names and statuses for the whole group',
+      async () => {
+    const publicView = await api.detail(student, 8);
+    expect(publicView.students).toBeUndefined();
+    expect(publicView.summary).toBeUndefined();
+    const privateView = await api.detail(actor, 8);
+    expect(privateView.students).toHaveLength(2);
+    expect(privateView.students?.some(item =>
+      item.status === 'pending')).toBe(true);
+  });
+
+  test('only server-approved starosta can import a group roster',
+      async () => {
+    const input = {
+      group, students: [
+        { fullName: 'Иванов Иван Иванович', sourceId: 'st-100' },
+        { fullName: 'Петров Пётр Петрович', sourceId: 'st-101' },
+      ],
+    };
+    process.env.SESSION_SECRET = 's'.repeat(48);
+    await expect(api.importRoster(student, input))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    await expect(api.importRoster(actor, { ...input, group: 'А-02-23' }))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    const imported = await api.importRoster(actor, input);
+    expect(imported).toMatchObject({count: 2, group, imported: true});
+    const inserted = query.mock.calls.filter(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_attendance_roster '));
+    expect(inserted).toHaveLength(2);
+    expect(inserted[0][1][1]).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  test('server-side roster sync imports only BARS-fetched students', async () => {
+    process.env.SESSION_SECRET = 's'.repeat(48);
+    fetchRoster.mockResolvedValue([
+      {fullName: 'Иванов Иван Иванович', email: 'ivanovii@mpei.ru'},
+      {fullName: 'Петров Пётр Петрович', email: 'petrovpp@mpei.ru'},
+      {fullName: 'Сидоров Олег Николаевич', email: 'sidorovon@mpei.ru'},
+    ]);
+    await expect(api.syncFromBars(student, 'private-cookie'))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(fetchRoster).not.toHaveBeenCalled();
+    const result = await api.syncFromBars(actor, 'private-cookie');
+    expect(result).toMatchObject({count: 3, group, imported: true});
+    expect(fetchRoster).toHaveBeenCalledWith('private-cookie', group);
+    expect(query.mock.calls.some(([sql, params]) =>
+      String(sql).includes('campus_attendance_roster_verified') &&
+      JSON.stringify(params).includes('backend_bars_verified'))).toBe(true);
+    expect(JSON.stringify(query.mock.calls)).not.toContain('private-cookie');
+  });
+
+  test('duplicate FIO and invalid data abort import before DB changes',
+      async () => {
+    process.env.SESSION_SECRET = 's'.repeat(48);
+    await expect(api.importRoster(actor, {
+      group, students: [
+        {fullName: 'Иванов Иван Иванович'},
+        {fullName: 'Иванов Иван Иванович'},
+      ],
+    })).rejects.toBeInstanceOf(BadRequestException);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('UPDATE campus_attendance_roster SET active=0')))
+      .toBe(false);
+  });
+
+  test('reviewed absences mark selected absent and all others present',
+      async () => {
+    const result = await api.saveAbsences(actor, 8, {
+      rosterKeys: [owner, classmate],
+      absentKeys: [classmate],
+    });
+    expect(result).toEqual({
+      state: 'closed', absent: 1, present: 1, barsSynced: false,
+    });
+    const writes = query.mock.calls.filter(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_attendance_entries '));
+    expect(writes).toHaveLength(2);
+    expect(writes.map(([, params]) => params[2]).sort())
+      .toEqual(['absent', 'present']);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("SET state='closed'"))).toBe(true);
+  });
+
+
+  test('starosta can remove saved N with an audited row-level correction',
+      async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_attendance_lessons')) {
+        return [{...lesson, state: 'closed'}];
+      }
+      if (sql.startsWith('SELECT state FROM campus_attendance_lessons')) {
+        return [{state: 'closed'}];
+      }
+      if (sql.startsWith('SELECT e.status FROM campus_attendance_entries e')) {
+        return [{status: 'absent'}];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const correction = {
+      ownerKey: classmate, expectedStatus: 'absent' as const,
+      status: 'present' as const,
+    };
+    await expect(api.correctClosedAttendance(student, 8, correction))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(await api.correctClosedAttendance(actor, 8, correction))
+      .toEqual({status: 'present', changed: true});
+    expect(query.mock.calls.some(([sql, params]) =>
+      String(sql).startsWith('UPDATE campus_attendance_entries SET status=') &&
+      params[0] === 'present' && params[2] === 8 &&
+      params[3] === classmate)).toBe(true);
+    expect(query.mock.calls.some(([sql, params]) =>
+      String(sql).startsWith('INSERT INTO campus_attendance_audit') &&
+      params[3] === 'correct' &&
+      params[4] === 'absent' && params[5] === 'present')).toBe(true);
+  });
+
+  test('closed journal correction rejects stale status and missing member',
+      async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_attendance_lessons'))
+        return [{...lesson, state: 'closed'}];
+      if (sql.startsWith('SELECT state FROM campus_attendance_lessons'))
+        return [{state: 'closed'}];
+      if (sql.startsWith('SELECT e.status FROM campus_attendance_entries e'))
+        return [{status: 'present'}];
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const stale = {
+      ownerKey: classmate, expectedStatus: 'absent' as const,
+      status: 'present' as const,
+    };
+    await expect(api.correctClosedAttendance(actor, 8, stale))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('UPDATE campus_attendance_entries SET status=')))
+      .toBe(false);
+  });
+
+  test('stale or forged roster selection cannot save attendance',
+      async () => {
+    await expect(api.saveAbsences(actor, 8, {
+      rosterKeys: [owner], absentKeys: [classmate],
+    })).rejects.toBeInstanceOf(ConflictException);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_attendance_entries ')))
+      .toBe(false);
+  });
+
+  test('import maps BARS university email to an opaque student identity', async () => {
+    process.env.SESSION_SECRET = 's'.repeat(48);
+    await api.importRoster(actor, {
+      group, students: [
+        {fullName: 'Иванов Иван Иванович', email: 'ivanoviv@mpei.ru'},
+        {fullName: 'Петров Пётр Петрович', email: 'PetrovPS@mpei.ru'},
+      ],
+    });
+    const associations = query.mock.calls.filter(([sql]) =>
+      String(sql).startsWith(
+        'INSERT INTO campus_attendance_roster_accounts',
+      ));
+    expect(associations).toHaveLength(2);
+    expect(associations[1][1][3]).toBe(
+      rosterIdentityHash(group, 'login', 'petrovps'),
+    );
+    expect(JSON.stringify(associations)).not.toContain('PetrovPS@mpei.ru');
+  });
+
+  test("my-absences returns only verified student\'s own closed absences",
+      async () => {
+    process.env.SESSION_SECRET = 's'.repeat(48);
+    const studentHash = rosterIdentityHash(
+      group, 'login', 'petrovps')!;
+    const personalActor = {...student, rosterLoginHash: studentHash};
+    query.mockImplementation(async (sql: string, values?: unknown[]) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster')) {
+        expect(values).toEqual([group, '', studentHash]);
+        return [{owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT l.lesson_date,l.lesson_time')) {
+        expect(sql).toContain("l.state='closed'");
+        expect(sql).toContain("e.status='absent'");
+        expect(sql).toContain('campus_attendance_lesson_roster');
+        expect(values).toEqual([
+          group, classmate, '2026-11-09', '2026-11-15',
+        ]);
+        return [{
+          lesson_date: '2026-11-12',
+          lesson_time: '09:20 - 10:55',
+          subject: 'Моделирование систем управления',
+          lesson_type: 'Лекция',
+          room: 'В-308',
+        }];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const actual = await api.myAbsences(
+      personalActor, '2026-11-09', '2026-11-15');
+    expect(actual).toEqual([{
+      date: '2026-11-12',
+      time: '09:20 - 10:55',
+      subject: 'Моделирование систем управления',
+      type: 'Лекция',
+      room: 'В-308',
+    }]);
+    expect((await api.myAbsences(
+      student, '2026-11-09', '2026-11-15')).length).toBe(0);
+  });
+
+  test('ambiguous roster account identities never expose someone else N',
+      async () => {
+    const current = {...student, rosterLoginHash: 'd'.repeat(64)};
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster')) {
+        return [{owner_key: owner}, {owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT l.lesson_date,l.lesson_time')) {
+        throw new Error('Must not query absences for ambiguous identity');
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    expect(await api.myAbsences(
+      current, '2026-11-09', '2026-11-15')).toEqual([]);
+  });
+
+  test('closing fails until every group member has explicit final status',
+      async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_attendance_lessons')) return [lesson];
+      if (sql.startsWith('SELECT state FROM campus_attendance_lessons')) {
+        return [{state: 'open'}];
+      }
+      if (sql.startsWith('SELECT s.owner_key,e.status')) return [
+        {owner_key: owner, status: 'present'},
+        {owner_key: classmate, status: null},
+      ];
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    await expect(api.close(actor, 8, [owner, classmate]))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('UPDATE campus_attendance_lessons'))).toBe(false);
+  });
+
+  test('close checks exact roster and cannot silently declare nonresponders absent',
+      async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT * FROM campus_attendance_lessons')) return [lesson];
+      if (sql.startsWith('SELECT state FROM campus_attendance_lessons')) {
+        return [{state: 'open'}];
+      }
+      if (sql.startsWith('SELECT s.owner_key,e.status')) return [
+        {owner_key: owner, status: 'present'},
+        {owner_key: classmate, status: 'absent'},
+      ];
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    await expect(api.close(actor, 8, [owner]))
+      .rejects.toBeInstanceOf(ConflictException);
+    const done = await api.close(actor, 8, [classmate, owner]);
+    expect(done).toEqual({state: 'closed', barsSynced: false});
+  });
+});

@@ -1,6 +1,7 @@
 import {
   Injectable,
   Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import axios from 'axios';
@@ -11,6 +12,8 @@ export interface VerifiedBarsStudent {
   recordBook: string;
   /** Group confirmed from the protected BARS student row. */
   group?: string;
+  /** Verified profile ID, kept only as a server-side HMAC in session. */
+  studentId: string;
 }
 
 /**
@@ -25,41 +28,256 @@ export class BarsSessionVerifier {
   private readonly origin = 'https://bars.mpei.ru';
   private readonly logger = new Logger(BarsSessionVerifier.name);
 
-  private async fetchBars(path: string, cookies: string): Promise<string> {
+  /** A redirect may be a canonical trailing slash, or an expired login.
+   * Follow at most one canonical same-origin redirect; never forward cookies
+   * to another host, login route or unrelated protected resource.
+   * Logging includes only a fixed category, never a Location header.
+   */
+  private safeCanonicalRedirect(
+    path: string, location: unknown,
+  ): { path?: string; category: string } {
+    if (typeof location !== 'string' || location.length > 2048) {
+      return { category: 'missing-location' };
+    }
+    try {
+      const current = new URL(path, this.origin);
+      const next = new URL(location, current);
+      if (next.origin !== this.origin || next.username || next.password ||
+          next.hash) return { category: 'external-or-invalid' };
+      // BARS sends unauthenticated users to /bars_web/?ReturnURL=...
+      // rather than always using an /Auth/Login path. This is not a
+      // canonical redirect and must never be treated as authenticated.
+      const normalizedPath = next.pathname.replace(/\/+$/, '').toLowerCase();
+      const loginEntry = normalizedPath === '/bars_web' &&
+        [...next.searchParams.keys()].some(key =>
+          key.toLowerCase() === 'returnurl');
+      if (loginEntry ||
+          /\/(?:Auth|Account)\/(?:Login|LogOn|SignIn)(?:\/|$)/i
+            .test(next.pathname)) {
+        return { category: 'login-redirect' };
+      }
+      if (normalizedPath === '/bars_web/auth/menu') {
+        // May be a role-specific landing page, not necessarily login.
+        return { category: 'menu-redirect' };
+      }
+      const canonical = (pathname: string) => pathname.replace(/\/+$/, '');
+      if (canonical(next.pathname) !== canonical(current.pathname) ||
+          next.search !== current.search) {
+        return { category: 'different-bars-page' };
+      }
+      if (next.pathname + next.search === current.pathname + current.search) {
+        return { category: 'redirect-loop' };
+      }
+      return { path: next.pathname + next.search, category: 'canonical' };
+    } catch {
+      return { category: 'invalid-location' };
+    }
+  }
+
+  private async fetchBars(
+    path: string, cookies: string, redirected = false,
+  ): Promise<string> {
+    // Always disable Axios' automatic redirection to protect BARS cookies.
+    const stage = path.startsWith('/bars_web/ST/Student/ListStudent')
+      ? 'student-list'
+      : path.startsWith('/bars_web/ST_Study/Main/Main')
+        ? 'study-profile'
+        : 'student-profile';
     try {
       const response = await axios.get<string>(this.origin + path, {
         headers: {
           Cookie: cookies,
           Accept: 'text/html',
+          'Accept-Language': 'ru-RU,ru;q=0.9',
+          'User-Agent': 'Mozilla/5.0 CampusApp BARS session verification',
+          Referer: this.origin + '/bars_web/Auth/Menu',
         },
         responseType: 'text',
-        timeout: 8500,
+        timeout: 9000,
         maxRedirects: 0,
         maxContentLength: 750 * 1024,
         validateStatus: (status) => status === 200,
       });
       if (typeof response.data !== 'string') {
-        throw new Error('Unexpected BARS response');
+        throw new Error('Invalid BARS response body');
       }
       return response.data;
     } catch (error) {
-      // Log only a fixed endpoint label and numeric HTTP status.
-      // Never log cookies, full URLs, BARS HTML, or student identifiers.
-      const stage = path.startsWith('/bars_web/ST/Student/ListStudent')
-        ? 'student-list'
-        : path.startsWith('/bars_web/ST_Study/Main/Main')
-          ? 'study-profile'
-          : 'student-profile';
-      const status = axios.isAxiosError(error)
-        ? error.response?.status
-        : undefined;
+      if (error instanceof UnauthorizedException ||
+          error instanceof ServiceUnavailableException) throw error;
+      // Never log cookies, redirect URLs, HTML, names, student IDs or books.
+      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+      const rawCode = axios.isAxiosError(error) ? error.code : undefined;
+      const code = typeof rawCode === 'string' && /^[A-Z_]{2,40}$/.test(rawCode)
+        ? rawCode : 'unknown';
+      const isRedirect = status === 301 || status === 302 || status === 303 ||
+        status === 307 || status === 308;
+      const redirect = isRedirect
+        ? this.safeCanonicalRedirect(path,
+            axios.isAxiosError(error) ? error.response?.headers?.location : undefined)
+        : null;
+      if (redirect?.path && !redirected) {
+        return this.fetchBars(redirect.path, cookies, true);
+      }
       this.logger.warn(
-        'BARS admin verification: request-failed stage=' + stage +
-        ' status=' + (typeof status === 'number' ? status : 'network-or-format'),
+        'BARS verification: request-failed stage=' + stage +
+        ' status=' + (typeof status === 'number' ? status : 'none') +
+        ' code=' + code +
+        (redirect ? ' redirect=' + (redirected ? 'second-redirect' : redirect.category) : ''),
       );
+      if (isRedirect || status === 401 || status === 403) {
+        const stageName = stage === 'student-list'
+          ? 'список студентов'
+          : 'профиль студента';
+        const reason = redirect?.category === 'login-redirect'
+          ? ' (перенаправление на вход)'
+          : '';
+        throw new UnauthorizedException(
+          'БАРС не подтвердил сессию (' + stageName + ', HTTP ' +
+          status + reason + '). Повтори вход в БАРС на телефоне через CampusApp. ' +
+          'Если ошибка повторится, передай только этап и код.',
+        );
+      }
+      if (status === 429 || (typeof status === 'number' && status >= 500) ||
+          status === undefined) {
+        throw new ServiceUnavailableException(
+          'Не удалось связаться с БАРС для проверки сессии' +
+          (typeof status === 'number' ? ' (HTTP ' + status + ')' : '') +
+          '. Повтори проверку позже.',
+        );
+      }
       throw new UnauthorizedException(
-        'Не удалось проверить сессию БАРС. Войди в БАРС ещё раз.',
+        'БАРС не подтвердил сессию (HTTP ' + status + '). ' +
+        'Проверь авторизацию в CampusApp.',
       );
+    }
+  }
+
+  /**
+   * Prove a starosta role from three BARS-protected pages, not from Flutter.
+   * All URLs are fixed or validated BARS group links. On any ambiguity,
+   * return false and do not grant attendance editing privileges.
+   */
+  async verifyStarosta(cookies: string, group: string | undefined): Promise<boolean> {
+    if (!group || !/^[А-ЯЁA-Z0-9]+(?:-[А-ЯЁA-Z0-9]+){1,3}$/.test(group)) {
+      return false;
+    }
+    const normalizeGroup = (value: string) => value
+      .toUpperCase().replace(/A/g, 'А').replace(/[–—−]/g, '-')
+      .replace(/\s+/g, '');
+    const normalizeName = (value: string) => value
+      .normalize('NFC').trim().toLocaleLowerCase('ru-RU')
+      .replace(/\s+/g, ' ').replace(/ё/g, 'е');
+
+    try {
+      const menu = cheerio.load(await this.fetchBars('/bars_web/Auth/Menu', cookies));
+      const accountLabel = menu('#ddMessage span.d-none.d-md-inline')
+        .first().text().trim();
+      const login = accountLabel.split('\\').pop() ?? '';
+      if (!/^[A-Za-z][A-Za-z0-9_.-]{2,63}$/.test(login)) {
+        this.logger.warn('BARS starosta verification: menu-login-missing');
+        return false;
+      }
+
+      const list = cheerio.load(
+        await this.fetchBars('/bars_web/SG/StudyGroup/ListStudyGroup', cookies),
+      );
+      const groupLinks = list('a[href]').toArray()
+        .filter(el => normalizeGroup(list(el).text().trim()) === normalizeGroup(group))
+        .map(el => list(el).attr('href') ?? '')
+        .filter(href => href.includes('EditStudyGroup?'));
+      const ids = new Set<string>();
+      for (const href of groupLinks) {
+        const url = new URL(href, this.origin);
+        if (url.origin !== this.origin || url.username || url.password ||
+            url.hash || url.pathname !== '/bars_web/SG/StudyGroup/EditStudyGroup' ||
+            [...url.searchParams.keys()].some(k => k !== 'sgID')) continue;
+        const id = url.searchParams.getAll('sgID');
+        if (id.length === 1 &&
+            /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id[0])) {
+          ids.add(id[0].toLowerCase());
+        }
+      }
+      if (ids.size !== 1) {
+        this.logger.warn('BARS starosta verification: group-link-not-unique');
+        return false;
+      }
+      const sgID = [...ids][0];
+      const groupPage = cheerio.load(await this.fetchBars(
+        '/bars_web/SG/StudyGroup/EditStudyGroup?sgID=' + encodeURIComponent(sgID),
+        cookies,
+      ));
+      // Match only the field explicitly labeled "Староста".
+      const label = groupPage('label, th, dt, div, span').toArray().find(el => {
+        const wrapped = groupPage(el);
+        return wrapped.children().length === 0 &&
+          wrapped.text().trim().replace(/:$/, '') === 'Староста';
+      });
+      if (!label) {
+        this.logger.warn('BARS starosta verification: starosta-field-missing');
+        return false;
+      }
+      const $label = groupPage(label);
+      const inputAndText = (el: ReturnType<typeof groupPage>) =>
+        (el.text() + ' ' + el.find('input, textarea').toArray()
+          .map(child => groupPage(child).attr('value') ?? '').join(' ')).trim();
+      const candidate = [
+        inputAndText($label.next()),
+        inputAndText($label.parent().next()),
+        inputAndText($label.closest('tr, .row, .form-group').first()),
+      ].find(v => v.length > 3 && v.length < 400) ?? '';
+      if (!candidate) {
+        this.logger.warn('BARS starosta verification: starosta-name-missing');
+        return false;
+      }
+
+      // This table also includes other journal maintainers. Their presence
+      // alone is NOT sufficient: the person must be the named starosta above,
+      // and the BARS account login must match their official email.
+      const rows = groupPage('tr').toArray();
+      const verified = rows.filter(row => {
+        const cells = groupPage(row).find('td');
+        if (cells.length < 5) return false;
+        const name = [1, 2, 3].map(i => cells.eq(i).text().trim()).join(' ');
+        const canonical = normalizeName(name);
+        if (canonical.split(' ').filter(Boolean).length < 3 ||
+            !normalizeName(candidate).includes(canonical)) return false;
+        const addresses = groupPage(row).find('a[href^="mailto:"]').toArray()
+          .map(el => (groupPage(el).attr('href') ?? '').slice(7))
+          .filter(email => /^[A-Za-z0-9_.-]+@mpei\.ru$/i.test(email));
+        return addresses.some(email =>
+          email.split('@')[0].toLowerCase() === login.toLowerCase());
+      });
+
+      if (verified.length !== 1) {
+        this.logger.warn('BARS starosta verification: identity-does-not-match');
+        return false;
+      }
+      return true;
+    } catch {
+      // Missing permissions, HTML changes, or BARS downtime never turn into
+      // a privileged session. The user may retry verification later.
+      this.logger.warn('BARS starosta verification: protected-page-unavailable');
+      return false;
+    }
+  }
+
+  /** BARS menu identifies the signed-in university account (not a
+   * username supplied by the phone). Only opaque HMAC is stored in session.
+   */
+  async verifyAccountLogin(cookies: string): Promise<string | null> {
+    try {
+      const $ = cheerio.load(
+        await this.fetchBars('/bars_web/Auth/Menu', cookies),
+      );
+      const label = $('#ddMessage span.d-none.d-md-inline')
+        .first().text().trim();
+      const login = label.split('\\').pop()?.trim() ?? '';
+      return /^[A-Za-z][A-Za-z0-9_.-]{2,63}$/.test(login)
+        ? login.toLowerCase() : null;
+    } catch {
+      this.logger.warn('BARS roster identity: account-menu-unavailable');
+      return null;
     }
   }
 
@@ -118,6 +336,7 @@ export class BarsSessionVerifier {
     }
 
     let detailsPath: string;
+    let verifiedStudentId: string | undefined;
     // Diagnostic codes never contain cookies, full URLs, student IDs,
     // or record-book numbers.
     let rejectionReason = 'invalid-url';
@@ -179,6 +398,7 @@ export class BarsSessionVerifier {
       }
 
       const { studentId, isGuid, pathname } = profiles[0];
+      verifiedStudentId = isGuid ? studentId.toLowerCase() : studentId;
       // Only BARS-provided, validated identifiers go to known BARS endpoints.
       // GUID study pages expose the record book in #div-FormHeader.
       detailsPath = isGuid
@@ -229,6 +449,7 @@ export class BarsSessionVerifier {
     return {
       recordBook: listBook,
       group: headerAgrees ? listGroup : undefined,
+      studentId: verifiedStudentId!,
     };
   }
 }

@@ -18,10 +18,15 @@ import { LessonNotesService } from './lesson-notes/lesson-notes.service';
 import { LessonGroupGuard } from './lesson-notes/lesson-group.guard';
 import { RoomBookingsController } from './room-bookings/room-bookings.controller';
 import { RoomBookingsService } from './room-bookings/room-bookings.service';
+import { AttendanceController } from './attendance/attendance.controller';
+import { AttendanceService } from './attendance/attendance.service';
+import { AttendanceGuard } from './attendance/attendance.guard';
+import { BarsRosterFetcher } from './attendance/bars-roster-fetcher.service';
+import { ScheduleService } from '../schedule/schedule.service';
 
 @Module({
   imports: [AuthModule],
-  controllers: [ServicesController, CommunityAdminController, ListingsController, StudyPublicController, LessonNotesController, RoomBookingsController],
+  controllers: [ServicesController, CommunityAdminController, ListingsController, StudyPublicController, LessonNotesController, RoomBookingsController, AttendanceController],
   providers: [
     ServicesService,
     DbService,
@@ -35,6 +40,10 @@ import { RoomBookingsService } from './room-bookings/room-bookings.service';
     LessonNotesService,
     LessonGroupGuard,
     RoomBookingsService,
+    AttendanceService,
+    AttendanceGuard,
+    BarsRosterFetcher,
+    ScheduleService,
   ],
 })
 export class ServicesModule {}
