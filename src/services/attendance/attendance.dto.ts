@@ -122,3 +122,31 @@ export class PublishBarsRankingDto {
   @ValidateNested({each:true}) @Type(() => BarsRankingSubjectDto)
   subjects!: BarsRankingSubjectDto[];
 }
+
+/** Additional managed group can only be verified by fetching BARS on server. */
+export class AttendanceManagedGroupDto {
+  @IsString() @Matches(/^[А-ЯЁA-Z0-9-]{3,40}$/)
+  group!: string;
+
+  @IsString() @IsNotEmpty() @MaxLength(8192)
+  cookieHeader!: string;
+}
+
+export class AttendanceRosterSyncDto {
+  @IsString() @IsNotEmpty() @MaxLength(8192)
+  cookieHeader!: string;
+
+  @IsOptional() @IsString() @Matches(/^[А-ЯЁA-Z0-9-]{3,40}$/)
+  group?: string;
+}
+
+export class AttendanceReportQueryDto {
+  @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  from!: string;
+
+  @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  to!: string;
+
+  @IsOptional() @IsString() @Matches(/^[А-ЯЁA-Z0-9-]{3,40}$/)
+  group?: string;
+}
