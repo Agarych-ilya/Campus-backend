@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { CampusMapController } from './map/campus-map.controller';
+import { CampusMapService } from './map/campus-map.service';
 import { AuthModule } from '../auth/auth.module';
 import { DbService } from '../db.service';
 import { CommunityAdminController } from './admin/community-admin.controller';
@@ -26,7 +28,7 @@ import { ScheduleService } from '../schedule/schedule.service';
 
 @Module({
   imports: [AuthModule],
-  controllers: [ServicesController, CommunityAdminController, ListingsController, StudyPublicController, LessonNotesController, RoomBookingsController, AttendanceController],
+  controllers: [ServicesController, CommunityAdminController, ListingsController, StudyPublicController, LessonNotesController, RoomBookingsController, AttendanceController, CampusMapController],
   providers: [
     ServicesService,
     DbService,
@@ -43,6 +45,7 @@ import { ScheduleService } from '../schedule/schedule.service';
     AttendanceService,
     AttendanceGuard,
     BarsRosterFetcher,
+    CampusMapService,
     ScheduleService,
   ],
 })
