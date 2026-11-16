@@ -350,12 +350,16 @@ export class AttendanceService {
       average_score:string|number; subject_count:string|number;
       score_total:string|number;
     }>;
+    let previousScore: number | null = null;
+    let currentPlace = 0;
     const leaderboard = entries.map((entry, index) => {
       const score = Number(entry.average_score);
-      const higher = entries.slice(0, index).filter(other =>
-        Number(other.average_score) > score).length;
+      if (previousScore === null || score !== previousScore) {
+        currentPlace = index + 1;
+        previousScore = score;
+      }
       return {
-        place: higher + 1,
+        place: currentPlace,
         displayName: entry.display_name,
         group: entry.group_name,
         averageScore: score,
