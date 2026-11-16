@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import {
   BadRequestException, ConflictException, ForbiddenException,
   Injectable, NotFoundException,
@@ -433,6 +433,79 @@ export class AttendanceService {
       entries:leaderboard,
       metric:'weighted_control_grades_2_5',source:'participant_submitted',
     };
+  }
+
+  /** Profile avatars are stored by the server's BARS-session actor key.
+   * Do not trust an ownerKey supplied by Flutter or a guessed local path.
+   */
+  async uploadProfileAvatar(actor: AttendanceIdentity, file?: Express.Multer.File) {
+    await this.ensureSchema();
+    const bytes = file?.buffer;
+    if (!bytes || bytes.length === 0 || bytes.length > 4 * 1024 * 1024) {
+      throw new BadRequestException('Фото должно быть меньше 4 МБ');
+    }
+    // Whitelist real image signatures. Do not trust supplied Content-Type.
+    const jpeg = bytes.length > 3 && bytes[0] === 0xff &&
+      bytes[1] === 0xd8 && bytes[2] === 0xff;
+    const png = bytes.length > 8 &&
+      bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
+    const webp = bytes.length > 12 &&
+      bytes.toString('ascii',0,4) === 'RIFF' &&
+      bytes.toString('ascii',8,12) === 'WEBP';
+    const mime = jpeg ? 'image/jpeg' : png ? 'image/png' :
+      webp ? 'image/webp' : null;
+    if (!mime) {
+      throw new BadRequestException('Поддерживаются только JPG, PNG и WebP');
+    }
+    const matchedRosterKey = await this.ownRosterKey(actor);
+    const avatarId = randomUUID();
+    await this.db.query(
+      'INSERT INTO campus_profile_avatars ' +
+      '(actor_key,group_name,roster_key,avatar_id,mime,image_data) ' +
+      'VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE ' +
+      'group_name=VALUES(group_name),roster_key=VALUES(roster_key),' +
+      'avatar_id=VALUES(avatar_id),mime=VALUES(mime),' +
+      'image_data=VALUES(image_data),updated_at=CURRENT_TIMESTAMP',
+      [actor.ownerKey,actor.group,matchedRosterKey,avatarId,mime,bytes],
+    );
+    return {saved:true,avatarId};
+  }
+
+  async myProfileAvatar(actor: AttendanceIdentity) {
+    await this.ensureSchema();
+    const rows = await this.db.query(
+      'SELECT image_data,mime FROM campus_profile_avatars ' +
+      'WHERE actor_key=? LIMIT 1',
+      [actor.ownerKey],
+    ) as Array<{image_data:Buffer;mime:string}>;
+    if (!rows.length) throw new NotFoundException('Аватарка не загружена');
+    return {bytes:rows[0].image_data,mime:rows[0].mime};
+  }
+
+  async removeProfileAvatar(actor: AttendanceIdentity) {
+    await this.ensureSchema();
+    await this.db.query(
+      'DELETE FROM campus_profile_avatars WHERE actor_key=?',
+      [actor.ownerKey],
+    );
+    return {deleted:true};
+  }
+
+  async rankingProfileAvatar(actor: AttendanceIdentity, id: string) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+      throw new NotFoundException('Нет аватарки');
+    }
+    await this.ensureSchema();
+    const rows = await this.db.query(
+      'SELECT a.image_data,a.mime FROM campus_profile_avatars a ' +
+      'INNER JOIN campus_weighted_grade_rankings gr ' +
+      'ON gr.owner_key=a.roster_key AND gr.group_name=a.group_name ' +
+      'WHERE a.avatar_id=? AND (a.group_name=? ' +
+      "OR (?=1 AND a.group_name LIKE 'А-%')) LIMIT 1",
+      [id,actor.group,actor.group.startsWith('А-') ? 1 : 0],
+    ) as Array<{image_data:Buffer;mime:string}>;
+    if (!rows.length) throw new NotFoundException('Нет аватарки');
+    return {bytes:rows[0].image_data,mime:rows[0].mime};
   }
 
   /** Full class roster is private to an authenticated starosta. */

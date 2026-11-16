@@ -1,8 +1,11 @@
 import {
   Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post,
-  Query, Req, UseGuards, UsePipes, ValidationPipe,
+  Query, Req, Res, UploadedFile, UseGuards, UsePipes, UseInterceptors, ValidationPipe,
   ForbiddenException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import type { Response } from 'express';
 import { attendanceIdentity, AttendanceGuard } from './attendance.guard';
 import { AttendanceService } from './attendance.service';
 import { BarsSessionVerifier } from '../admin/bars-session-verifier.service';
@@ -67,6 +70,49 @@ export class AttendanceController {
   @UseGuards(AttendanceGuard)
   withdrawScore(@Req() req: any) {
     return this.service.withdrawBarsScore(req.attendanceIdentity);
+  }
+
+  /** The student's own avatar is server-side and authenticated. */
+  @Post('avatar')
+  @UseGuards(AttendanceGuard)
+  @UseInterceptors(FileInterceptor('avatar', {
+    storage: memoryStorage(),
+    limits: {fileSize: 4 * 1024 * 1024,files:1},
+  }))
+  uploadAvatar(@Req() req: any, @UploadedFile() file: Express.Multer.File) {
+    return this.service.uploadProfileAvatar(req.attendanceIdentity, file);
+  }
+
+  @Get('avatar')
+  @UseGuards(AttendanceGuard)
+  async myAvatar(@Req() req: any, @Res() res: Response) {
+    const image = await this.service.myProfileAvatar(req.attendanceIdentity);
+    return this.sendAvatar(res,image);
+  }
+
+  @Delete('avatar')
+  @UseGuards(AttendanceGuard)
+  removeAvatar(@Req() req: any) {
+    return this.service.removeProfileAvatar(req.attendanceIdentity);
+  }
+
+  @Get('avatars/:id')
+  @UseGuards(AttendanceGuard)
+  async rankingAvatar(@Req() req: any,@Param('id') id: string,@Res() res: Response) {
+    const image = await this.service.rankingProfileAvatar(
+      req.attendanceIdentity,id,
+    );
+    return this.sendAvatar(res,image);
+  }
+
+  private sendAvatar(res: Response, image: {bytes:Buffer;mime:string}) {
+    res.set({
+      'Content-Type':image.mime,
+      'Cache-Control':'private, no-store',
+      'X-Content-Type-Options':'nosniff',
+      'Content-Security-Policy':"default-src 'none'; sandbox",
+    });
+    return res.send(image.bytes);
   }
 
   @Get('ranking')
