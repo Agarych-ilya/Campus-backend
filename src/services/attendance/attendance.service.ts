@@ -879,6 +879,65 @@ export class AttendanceService {
     };
   }
 
+  /** On-demand CampusApp reports, not an official BARS XLS export.
+   * Only a current verified headman may see peer attendance.
+   * Snapshot rows keep historical names when the group roster changes.
+   */
+  async attendanceReport(
+    actor: AttendanceIdentity, from: string, to: string,
+  ) {
+    this.starosta(actor);
+    await this.ensureSchema();
+    const start = this.date(from);
+    const finish = this.date(to);
+    const days = (Date.parse(finish + 'T00:00:00Z') -
+      Date.parse(start + 'T00:00:00Z')) / 86400000;
+    if (days < 0 || days > 92) {
+      throw new BadRequestException('Выбери период не более 93 дней');
+    }
+    const rows = await this.db.query(
+      'SELECT l.id AS lesson_id,l.lesson_date,l.lesson_time,' +
+      'l.subject,l.lesson_type,l.room,' +
+      'r.owner_key,r.display_name,e.status ' +
+      'FROM campus_attendance_lessons l ' +
+      'JOIN campus_attendance_lesson_roster r ON r.lesson_id=l.id ' +
+      'LEFT JOIN campus_attendance_entries e ' +
+      'ON e.lesson_id=l.id AND e.owner_key=r.owner_key ' +
+      "WHERE l.group_name=? AND l.state='closed' " +
+      'AND l.lesson_date BETWEEN ? AND ? ' +
+      'ORDER BY l.lesson_date,l.lesson_time,l.subject,r.display_name ' +
+      'LIMIT 12001',
+      [actor.group, start, finish],
+    ) as Array<{
+      lesson_id: number|string; lesson_date: Date|string;
+      lesson_time: string; subject: string; lesson_type: string;
+      room: string; owner_key: string; display_name: string;
+      status: string | null;
+    }>;
+    if (rows.length > 12000) {
+      throw new BadRequestException(
+        'Слишком большой отчёт. Выбери более короткий период',
+      );
+    }
+    const safeStatus = (value: string | null) =>
+      ['present','absent','excused','pending','rejected']
+        .includes(value ?? '') ? value : 'unmarked';
+    return {
+      group: actor.group, from:start, to:finish,
+      source:'campus_attendance_closed_lessons', // Never claim official BARS.
+      rows: rows.map(row => ({
+        lessonId:Number(row.lesson_id),
+        date: row.lesson_date instanceof Date
+          ? row.lesson_date.toISOString().slice(0,10)
+          : String(row.lesson_date).slice(0,10),
+        time: row.lesson_time, subject: row.subject,
+        type:row.lesson_type, room:row.room,
+        ownerKey:row.owner_key, displayName:row.display_name,
+        status:safeStatus(row.status),
+      })),
+    };
+  }
+
   async list(actor: AttendanceIdentity, date: string) {
     await this.ensureSchema();
     const day = this.date(date);
