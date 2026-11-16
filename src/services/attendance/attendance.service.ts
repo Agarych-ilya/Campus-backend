@@ -316,6 +316,8 @@ export class AttendanceService {
     const filterParams = stream ? [] : [actor.group];
     const [rosterCount] = await this.db.query(
       'SELECT COUNT(*) AS total FROM campus_attendance_roster r ' +
+      'JOIN campus_attendance_roster_verified v ' +
+      "ON v.group_name=r.group_name AND v.source='backend_bars_verified' " +
       'WHERE r.active=1 AND ' + groupFilter,
       filterParams,
     ) as Array<{total:number|string}>;
@@ -328,6 +330,8 @@ export class AttendanceService {
       'SELECT gr.semester FROM campus_grade_rankings gr ' +
       'JOIN campus_attendance_roster r ON r.group_name=gr.group_name ' +
       'AND r.owner_key=gr.owner_key AND r.active=1 ' +
+      'JOIN campus_attendance_roster_verified v ' +
+      "ON v.group_name=r.group_name AND v.source='backend_bars_verified' " +
       'WHERE ' + groupFilter + ' ORDER BY gr.updated_at DESC LIMIT 1',
       filterParams,
     ) as Array<{semester:string}>;
@@ -342,6 +346,8 @@ export class AttendanceService {
       'FROM campus_grade_rankings gr JOIN campus_attendance_roster r ' +
       'ON r.group_name=gr.group_name AND r.owner_key=gr.owner_key ' +
       'AND r.active=1 ' +
+      'JOIN campus_attendance_roster_verified v ' +
+      "ON v.group_name=r.group_name AND v.source='backend_bars_verified' " +
       'WHERE gr.semester=? AND ' + groupFilter +
       ' ORDER BY gr.average_score DESC, gr.owner_key ASC LIMIT 5000',
       [semester, ...filterParams],
