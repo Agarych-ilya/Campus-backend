@@ -10,6 +10,7 @@ export interface AttendanceIdentity {
   ownerKey: string;
   group: string;
   isStarosta: boolean;
+  managedGroups?: string[];
   rosterStudentHash?: string;
   rosterLoginHash?: string;
 }
@@ -48,8 +49,24 @@ export function attendanceIdentity(session: any): AttendanceIdentity | null {
   const safeHash = (value: unknown): string | undefined =>
     typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
       ? value : undefined;
+  // An additional managed group is usable only if the server independently
+  // verified its headman field during THIS account verification epoch.
+  const serverManaged = session.listingManagedGroupsVerifiedAt === verifiedAt &&
+    Array.isArray(session.listingManagedGroups)
+    ? session.listingManagedGroups : [];
+  const managedGroups = new Set<string>();
+  for (const entry of serverManaged) {
+    if (typeof entry !== 'string') continue;
+    const normalized = normalizedStudyGroup(entry);
+    if (normalized.length <= 40 &&
+        /^[А-ЯЁA-Z0-9]+(?:-[А-ЯЁA-Z0-9]+){1,3}$/.test(normalized)) {
+      managedGroups.add(normalized);
+    }
+  }
+  if (checkedByBars || manuallyConfigured) managedGroups.add(group);
   return {
     ownerKey, group,
+    managedGroups: [...managedGroups].sort((a,b) => a.localeCompare(b, 'ru')),
     isStarosta: checkedByBars || manuallyConfigured,
     rosterStudentHash: safeHash(session.listingRosterStudentHash),
     rosterLoginHash: safeHash(session.listingRosterLoginHash),
