@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Param, ParseIntPipe, Patch, Post,
+  Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post,
   Query, Req, UseGuards, UsePipes, ValidationPipe,
   ForbiddenException,
 } from '@nestjs/common';
@@ -14,7 +14,7 @@ import {
   AttendanceCloseDto, AttendanceDateDto, AttendanceDecisionDto,
   AttendanceMemberDto, AttendanceOpenLessonDto,
   AttendanceRosterImportDto, AttendanceAbsencesDto,
-  AttendanceCorrectionDto,
+  AttendanceCorrectionDto, PublishBarsRankingDto,
 } from './attendance.dto';
 
 const validate = new ValidationPipe({
@@ -47,6 +47,28 @@ export class AttendanceController {
   }
 
   /** Own place by confirmed CampusApp attendance; no classmate records. */
+
+  /** The student explicitly submits their own cached BARS current points.
+   * Not an official university-grade feed. Withdrawal is always available.
+   */
+  @Get('score-ranking')
+  @UseGuards(AttendanceGuard)
+  scoreRanking(@Req() req: any, @Query('scope') scope = 'group') {
+    return this.service.barsScoresRanking(req.attendanceIdentity, scope);
+  }
+
+  @Post('score-ranking')
+  @UseGuards(AttendanceGuard) @UsePipes(validate)
+  publishScore(@Req() req: any, @Body() dto: PublishBarsRankingDto) {
+    return this.service.publishBarsScore(req.attendanceIdentity, dto);
+  }
+
+  @Delete('score-ranking')
+  @UseGuards(AttendanceGuard)
+  withdrawScore(@Req() req: any) {
+    return this.service.withdrawBarsScore(req.attendanceIdentity);
+  }
+
   @Get('ranking')
   @UseGuards(AttendanceGuard)
   personalRanking(@Req() req: any) {

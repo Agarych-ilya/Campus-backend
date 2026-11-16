@@ -12,7 +12,7 @@ import { BarsRosterFetcher } from './bars-roster-fetcher.service';
 import {
   AttendanceOpenLessonDto, AttendanceDecisionDto,
   AttendanceRosterImportDto, AttendanceAbsencesDto,
-  AttendanceCorrectionDto,
+  AttendanceCorrectionDto, PublishBarsRankingDto,
 } from './attendance.dto';
 
 type LessonRow = {
@@ -114,6 +114,20 @@ export class AttendanceService {
           ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
         );
         await this.db.query(
+          'CREATE TABLE IF NOT EXISTS campus_grade_rankings (' +
+          'group_name VARCHAR(60) NOT NULL, owner_key CHAR(64) NOT NULL, ' +
+          'semester VARCHAR(96) NOT NULL, ' +
+          'average_score DECIMAL(6,2) NOT NULL, ' +
+          'score_total DECIMAL(9,2) NOT NULL, ' +
+          'subject_count SMALLINT UNSIGNED NOT NULL, ' +
+          'updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ' +
+          'ON UPDATE CURRENT_TIMESTAMP, ' +
+          'PRIMARY KEY(group_name,owner_key), ' +
+          'INDEX idx_grade_rank_group(group_name,semester,average_score), ' +
+          'INDEX idx_grade_rank_semester(semester,average_score)' +
+          ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4',
+        );
+        await this.db.query(
           'CREATE TABLE IF NOT EXISTS campus_attendance_audit (' +
           'id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, ' +
           'lesson_id BIGINT UNSIGNED NOT NULL, actor_key CHAR(64) NOT NULL, ' +
@@ -202,6 +216,159 @@ export class AttendanceService {
       rank, attended: self?.present ?? 0,
       reviewedLessons: self?.reviewed ?? 0,
       metric: 'attendance',
+    };
+  }
+
+
+  /**
+   * Ranking is based ONLY on voluntarily published numeric BARS current
+   * scores, not attendance. These points are parsed from the student's local
+   * BARS cache and are not server-verified. Never represent this as an
+   * official MPEI ranking. Other students' score details are not exposed.
+   */
+  async publishBarsScore(actor: AttendanceIdentity, dto: PublishBarsRankingDto) {
+    await this.ensureSchema();
+    const mine = await this.ownRosterKey(actor);
+    if (!mine) {
+      throw new ForbiddenException(
+        'Нет подтверждённой связи аккаунта со списком группы БАРС',
+      );
+    }
+    const verified = await this.db.query(
+      'SELECT group_name FROM campus_attendance_roster_verified ' +
+      'WHERE group_name=? AND source=? LIMIT 1',
+      [actor.group, 'backend_bars_verified'],
+    ) as Array<{group_name:string}>;
+    if (!verified.length) {
+      throw new ForbiddenException(
+        'Сначала староста должен загрузить проверенный список группы',
+      );
+    }
+    const semester = this.clean(dto.semester);
+    if (!semester || semester.length > 96 ||
+        /[\x00-\x1f\x7f]/.test(semester)) {
+      throw new BadRequestException('Неверный семестр');
+    }
+    if (!Array.isArray(dto.subjects) ||
+        dto.subjects.length < 1 || dto.subjects.length > 40) {
+      throw new BadRequestException('Нужны баллы хотя бы по одному предмету');
+    }
+    const names = new Set<string>();
+    let sum = 0;
+    for (const subject of dto.subjects) {
+      const name = this.clean(subject.name).toLocaleLowerCase('ru-RU');
+      const value = subject.points;
+      if (!name || name.length > 180 || names.has(name) ||
+          typeof value !== 'number' || !Number.isFinite(value) ||
+          value < 0 || value > 100 ||
+          Math.round(value * 100) / 100 !== value) {
+        throw new BadRequestException('Некорректные или повторяющиеся баллы');
+      }
+      names.add(name);
+      sum += value;
+    }
+    const scoreTotal = Math.round(sum * 100) / 100;
+    const averageScore = Math.round(sum / dto.subjects.length * 100) / 100;
+    await this.db.query(
+      'INSERT INTO campus_grade_rankings ' +
+      '(group_name,owner_key,semester,average_score,score_total,subject_count) ' +
+      'VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE ' +
+      'semester=VALUES(semester),average_score=VALUES(average_score),' +
+      'score_total=VALUES(score_total),subject_count=VALUES(subject_count),' +
+      'updated_at=CURRENT_TIMESTAMP',
+      [actor.group, mine, semester, averageScore, scoreTotal,
+        dto.subjects.length],
+    );
+    return {published:true, semester, subjectCount:dto.subjects.length,
+      scoreTotal, averageScore, source:'participant_submitted'};
+  }
+
+  async withdrawBarsScore(actor: AttendanceIdentity) {
+    await this.ensureSchema();
+    const mine = await this.ownRosterKey(actor);
+    if (!mine) {
+      return {withdrawn:true};
+    }
+    await this.db.query(
+      'DELETE FROM campus_grade_rankings WHERE group_name=? AND owner_key=?',
+      [actor.group, mine],
+    );
+    return {withdrawn:true};
+  }
+
+  async barsScoresRanking(actor: AttendanceIdentity, scope: string) {
+    if (scope !== 'group' && scope !== 'stream') {
+      throw new BadRequestException('Режим рейтинга: group или stream');
+    }
+    await this.ensureSchema();
+    const mine = await this.ownRosterKey(actor);
+    const stream = scope === 'stream';
+    // All and only A-... groups comprise the user-requested stream.
+    // Other groups remain excluded even if their snapshots exist.
+    const groupFilter = stream
+      ? "r.group_name LIKE 'А-%'"
+      : 'r.group_name=?';
+    const filterParams = stream ? [] : [actor.group];
+    const [rosterCount] = await this.db.query(
+      'SELECT COUNT(*) AS total FROM campus_attendance_roster r ' +
+      'WHERE r.active=1 AND ' + groupFilter,
+      filterParams,
+    ) as Array<{total:number|string}>;
+    const ownRows = mine ? await this.db.query(
+      'SELECT semester FROM campus_grade_rankings ' +
+      'WHERE group_name=? AND owner_key=? LIMIT 1',
+      [actor.group, mine],
+    ) as Array<{semester:string}> : [];
+    const newest = await this.db.query(
+      'SELECT gr.semester FROM campus_grade_rankings gr ' +
+      'JOIN campus_attendance_roster r ON r.group_name=gr.group_name ' +
+      'AND r.owner_key=gr.owner_key AND r.active=1 ' +
+      'WHERE ' + groupFilter + ' ORDER BY gr.updated_at DESC LIMIT 1',
+      filterParams,
+    ) as Array<{semester:string}>;
+    const semester = ownRows[0]?.semester ?? newest[0]?.semester ?? null;
+    if (!semester) return {scope, group:actor.group, semester:null,
+      total:Number(rosterCount?.total ?? 0), participants:0,
+      myPlace:null, myAverage:null, published:false, entries:[],
+      source:'participant_submitted'};
+    const entries = await this.db.query(
+      'SELECT gr.owner_key, gr.group_name, r.display_name, ' +
+      'gr.average_score, gr.subject_count, gr.score_total ' +
+      'FROM campus_grade_rankings gr JOIN campus_attendance_roster r ' +
+      'ON r.group_name=gr.group_name AND r.owner_key=gr.owner_key ' +
+      'AND r.active=1 ' +
+      'WHERE gr.semester=? AND ' + groupFilter +
+      ' ORDER BY gr.average_score DESC, gr.owner_key ASC LIMIT 5000',
+      [semester, ...filterParams],
+    ) as Array<{
+      owner_key:string; group_name:string; display_name:string;
+      average_score:string|number; subject_count:string|number;
+      score_total:string|number;
+    }>;
+    const leaderboard = entries.map((entry, index) => {
+      const score = Number(entry.average_score);
+      const higher = entries.slice(0, index).filter(other =>
+        Number(other.average_score) > score).length;
+      return {
+        place: higher + 1,
+        displayName: entry.display_name,
+        group: entry.group_name,
+        averageScore: score,
+        subjectCount: Number(entry.subject_count),
+        mine: !!mine && entry.owner_key === mine &&
+          entry.group_name === actor.group,
+      };
+    });
+    const own = leaderboard.find(entry => entry.mine);
+    return {
+      scope, group:actor.group, semester,
+      total:Number(rosterCount?.total ?? 0),
+      participants:leaderboard.length,
+      myPlace:own?.place ?? null,
+      myAverage:own?.averageScore ?? null,
+      published:!!own,
+      entries:leaderboard,
+      source:'participant_submitted',
     };
   }
 

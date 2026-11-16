@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsArray, IsIn, IsNotEmpty, IsOptional, IsString,
+  IsNumber, Min, Max,
   Matches, MaxLength, ArrayMinSize, ArrayMaxSize, ValidateNested,
 } from 'class-validator';
 
@@ -96,4 +97,26 @@ export class AttendanceCorrectionDto {
 
   @IsIn(['present', 'absent'])
   status!: 'present' | 'absent';
+}
+
+
+/** Explicitly published score snapshot. BARS scores are supplied by the
+ * student's own device and are not independently verified by the server.
+ * No snapshot is published automatically on BARS login.
+ */
+export class BarsRankingSubjectDto {
+  @IsString() @IsNotEmpty() @MaxLength(180)
+  name!: string;
+
+  @IsNumber({maxDecimalPlaces: 2}) @Min(0) @Max(100)
+  points!: number;
+}
+
+export class PublishBarsRankingDto {
+  @IsString() @IsNotEmpty() @MaxLength(96)
+  semester!: string;
+
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(40)
+  @ValidateNested({each:true}) @Type(() => BarsRankingSubjectDto)
+  subjects!: BarsRankingSubjectDto[];
 }
