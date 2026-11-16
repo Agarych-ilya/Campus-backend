@@ -16,4 +16,4 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Headman security and reports
-        run: npm test -- --runInBand src/services/attendance/starosta-cabinet.spec.ts
+        run: npm test -- --runInBand src/services/attendance/starosta-cabinet.spec.ts src/services/admin/bars-managed-groups.spec.ts src/schedule/ruz-entity.service.spec.ts src/services/attendance/bars-roster-fetcher.service.spec.ts
