@@ -46,6 +46,13 @@ export class AttendanceController {
     return this.service.myAbsences(req.attendanceIdentity, from, to);
   }
 
+  /** Own place by confirmed CampusApp attendance; no classmate records. */
+  @Get('ranking')
+  @UseGuards(AttendanceGuard)
+  personalRanking(@Req() req: any) {
+    return this.service.personalAttendanceRank(req.attendanceIdentity);
+  }
+
   @Get('roster')
   @UseGuards(AttendanceGuard)
   roster(@Req() req: any) {

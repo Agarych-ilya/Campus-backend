@@ -150,6 +150,61 @@ export class AttendanceService {
     return text.normalize('NFC').replace(/\s+/g, ' ').trim();
   }
 
+  /**
+   * Privacy-preserving personal rank by attendance among the imported group.
+   * Importing the BARS roster alone does NOT reveal grades of classmates:
+   * ranks only become meaningful after reviewed, closed CampusApp lessons.
+   * Return only the authenticated student's own position, never peer names.
+   */
+  async personalAttendanceRank(actor: AttendanceIdentity) {
+    await this.ensureSchema();
+    const sync = await this.db.query(
+      'SELECT student_count FROM campus_attendance_roster_sync ' +
+      'WHERE group_name=? ORDER BY id DESC LIMIT 1', [actor.group],
+    ) as Array<{student_count: number | string}>;
+    if (!sync.length) {
+      return {group: actor.group, imported: false, total: 0,
+        rank: null, attended: 0, reviewedLessons: 0,
+        metric: 'attendance'};
+    }
+    const rows = await this.db.query(
+      'SELECT r.owner_key, ' +
+      "COUNT(CASE WHEN l.id IS NOT NULL AND e.status IN ('present','absent') " +
+      'THEN 1 END) AS reviewed_count, ' +
+      "SUM(CASE WHEN l.id IS NOT NULL AND e.status='present' " +
+      'THEN 1 ELSE 0 END) AS present_count ' +
+      'FROM campus_attendance_roster r ' +
+      'LEFT JOIN campus_attendance_entries e ON e.owner_key=r.owner_key ' +
+      "LEFT JOIN campus_attendance_lessons l ON l.id=e.lesson_id " +
+      "AND l.group_name=r.group_name AND l.state='closed' " +
+      'WHERE r.group_name=? AND r.active=1 ' +
+      'GROUP BY r.owner_key ORDER BY r.owner_key LIMIT 121',
+      [actor.group],
+    ) as Array<{
+      owner_key: string; reviewed_count: number|string;
+      present_count: number|string;
+    }>;
+    const mine = await this.ownRosterKey(actor);
+    const results = rows.map(row => ({
+      key: row.owner_key,
+      reviewed: Math.max(0, Number(row.reviewed_count) || 0),
+      present: Math.max(0, Number(row.present_count) || 0),
+    }));
+    const self = results.find(row => row.key === mine);
+    let rank: number | null = null;
+    if (self && self.reviewed > 0) {
+      // Competition rank: tied attendance percentages share a place.
+      rank = 1 + results.filter(row => row.reviewed > 0 &&
+        row.present * self.reviewed > self.present * row.reviewed).length;
+    }
+    return {
+      group: actor.group, imported: true, total: rows.length,
+      rank, attended: self?.present ?? 0,
+      reviewedLessons: self?.reviewed ?? 0,
+      metric: 'attendance',
+    };
+  }
+
   /** Full class roster is private to an authenticated starosta. */
   async roster(actor: AttendanceIdentity) {
     this.starosta(actor);

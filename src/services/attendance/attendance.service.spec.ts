@@ -156,6 +156,69 @@ describe('BARS attendance - verified group and review workflow', () => {
       String(sql).startsWith('INSERT INTO campus_attendance_audit'))).toBe(true);
   });
 
+  test('personal ranking requires a verified imported roster and own identity',
+    async () => {
+    const personalActor = {
+      ...student, rosterLoginHash: 'd'.repeat(64),
+    };
+    query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync')) {
+        expect(params).toEqual([group]);
+        return [{student_count: 2}];
+      }
+      if (sql.startsWith('SELECT r.owner_key, COUNT(CASE')) {
+        expect(sql).toContain("l.state='closed'");
+        expect(sql).toContain("e.status IN ('present','absent')");
+        return [
+          {owner_key: owner, reviewed_count: 4, present_count: 4},
+          {owner_key: classmate, reviewed_count: 4, present_count: 3},
+        ];
+      }
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster')) {
+        return [{owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const response = await api.personalAttendanceRank(personalActor);
+    expect(response).toEqual({
+      group, imported: true, total: 2,
+      rank: 2, attended: 3, reviewedLessons: 4,
+      metric: 'attendance',
+    });
+    const unknown = await api.personalAttendanceRank(student);
+    expect(unknown.rank).toBeNull();
+    expect(unknown.total).toBe(2);
+    expect(JSON.stringify(response)).not.toContain(owner);
+    expect(JSON.stringify(response)).not.toContain(classmate);
+  });
+
+  test('ranking has no invented place without closed attendance',
+    async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync')) {
+        return [{student_count: 2}];
+      }
+      if (sql.startsWith('SELECT r.owner_key, COUNT(CASE')) {
+        return [
+          {owner_key: owner, reviewed_count: 0, present_count: 0},
+          {owner_key: classmate, reviewed_count: 0, present_count: 0},
+        ];
+      }
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster')) {
+        return [{owner_key: classmate}];
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const response = await api.personalAttendanceRank({
+      ...student, rosterLoginHash: 'd'.repeat(64),
+    });
+    expect(response).toMatchObject({
+      imported: true, total: 2, rank: null, reviewedLessons: 0,
+    });
+  });
+
   test('only starosta can see names and statuses for the whole group',
       async () => {
     const publicView = await api.detail(student, 8);
