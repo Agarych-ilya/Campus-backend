@@ -166,7 +166,9 @@ export class BarsRosterFetcher {
           allowed = url.protocol === 'https:' && url.origin === ORIGIN &&
             (req.method() === 'GET' ||
               (req.method() === 'POST' &&
-                url.pathname.startsWith('/bars_web/SG/StudyGroup/')));
+              (url.pathname.startsWith('/bars_web/SG/StudyGroup/') ||
+               url.pathname ===
+                 '/bars_web/SG/Student/_PartialListStudyGroup__Students')));
         } catch { /* refuse invalid URL */ }
         return allowed ? route.continue() : route.abort();
       });
@@ -206,13 +208,23 @@ export class BarsRosterFetcher {
       await link.click();
       this.checkBrowserLocation(page.url());
       stage = 'student-table';
+      const collected = new Map<string, BarsRosterStudentDto>();
+      const visitedPages = new Set<string>();
+      let expectedTotal: number | null = null;
       let lastError: Error | undefined;
-      for (let attempt = 0; attempt < 12; attempt++) {
+      for (let attempt = 0; attempt < 18; attempt++) {
         await page.waitForTimeout(450);
         this.checkBrowserLocation(page.url());
-        const result = parseBarsStudents(await page.content(), group);
-        if (result.found && result.complete) return result.students;
-        if (result.found) {
+        const html = await page.content();
+        const result = parseBarsStudents(html, group);
+        if (result.found && result.complete && collected.size === 0) {
+          return result.students;
+        }
+        if (!result.found) continue;
+
+        // First try displaying the entire table in one page, as before.
+        // Only then use verified DataTables pagination.
+        if (collected.size === 0) {
           try {
             const expanded = await page.evaluate(() => {
               const selects = Array.from(document.querySelectorAll('select'))
@@ -225,18 +237,69 @@ export class BarsRosterFetcher {
               const select = selects[0];
               const options = Array.from(select.options)
                 .filter(option => Number(option.value) >= 50)
-                .sort((a, b) => Number(b.value) - Number(a.value));
+                .sort((a,b) => Number(b.value)-Number(a.value));
               if (!options.length || select.value === options[0].value) return false;
               select.value = options[0].value;
-              select.dispatchEvent(new Event('change', {bubbles: true}));
+              select.dispatchEvent(new Event('change',{bubbles:true}));
               return true;
             });
             if (expanded) continue;
-          } catch { /* AJAX navigation can reset the JS context */ }
+          } catch { /* Page navigated during AJAX update. */ }
         }
+
+        const $ = cheerio.load(html);
+        const counter = $('.dataTables_info, [id$="_info"]').first().text();
+        const foundTotal = counter.match(/(?:из|of)\s+(\d+)\s*(?:запис|entries|$)/i);
+        if (foundTotal) {
+          const total = Number(foundTotal[1]);
+          if (!Number.isSafeInteger(total) || total < 3 || total > 120 ||
+              (expectedTotal !== null && expectedTotal !== total)) {
+            throw new ConflictException('Количество студентов БАРС изменилось');
+          }
+          expectedTotal = total;
+        }
+        // Every page must have both the verified group breadcrumb and a
+        // complete identity for each student. Repeated pages are rejected.
+        const signature = result.students.map(student =>
+          student.sourceId || student.fullName.toLowerCase()).join('|');
+        if (!signature || visitedPages.has(signature)) {
+          throw new ConflictException('БАРС вернул повторяющуюся страницу');
+        }
+        visitedPages.add(signature);
+        for (const student of result.students) {
+          const key = student.sourceId || student.fullName
+            .normalize('NFC').toLowerCase();
+          const prior = collected.get(key);
+          if (prior && (prior.fullName !== student.fullName ||
+              prior.email !== student.email)) {
+            throw new ConflictException('БАРС изменил студента между страницами');
+          }
+          collected.set(key,student);
+        }
+        if (collected.size > 120) {
+          throw new ConflictException('Слишком много студентов группы');
+        }
+        if (expectedTotal !== null && collected.size === expectedTotal) {
+          return [...collected.values()];
+        }
+
+        const next = page.locator(
+          '.dataTables_paginate .next:not(.disabled), ' +
+          '.pagination .next:not(.disabled), ' +
+          'a.paginate_button.next:not(.disabled)',
+        ).first();
+        if (await next.count() !== 1) {
+          lastError = new ConflictException(
+            'Невозможно прочитать все страницы студентов БАРС',
+          );
+          break;
+        }
+        stage = 'student-pagination';
+        await next.click();
+        stage = 'student-table';
         lastError = new ConflictException('Не удалось получить полный список БАРС');
       }
-      throw lastError ?? new ConflictException('Не найдена таблица студентов БАРС');
+      throw lastError ?? new ConflictException('Не найдена полная таблица БАРС');
     } catch (error) {
       // Log only fixed stage/type tags, never page URL, student names or cookies.
       const type = error instanceof UnauthorizedException ? 'session' :
