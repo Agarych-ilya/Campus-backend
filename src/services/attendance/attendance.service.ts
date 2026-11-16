@@ -874,6 +874,7 @@ export class AttendanceService {
     return {
       group: actor.group,
       isStarosta: actor.isStarosta,
+      managedGroups: actor.managedGroups ?? [],
       registered: rows.length > 0,
       displayName: rows[0]?.display_name ?? null,
     };
