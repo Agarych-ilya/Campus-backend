@@ -166,7 +166,7 @@ describe('BARS attendance - verified group and review workflow', () => {
       if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync')) {
         return [{student_count: 2}];
       }
-      if (sql.startsWith('INSERT INTO campus_grade_rankings')) {
+      if (sql.startsWith('INSERT INTO campus_weighted_grade_rankings')) {
         submissions.push(values);
         return {affectedRows:1};
       }
@@ -174,26 +174,26 @@ describe('BARS attendance - verified group and review workflow', () => {
       return {affectedRows:1};
     });
     const payload = {
-      semester: '2026/2027 осенний',
+      semester: 'Все семестры',
       subjects: [
-        {name: 'Математика', points: 72},
-        {name: 'Физика', points: 88},
+        {name: 'Математика', points: 5, weight: 30},
+        {name: 'Физика', points: 4, weight: 70},
       ],
     };
     await expect(api.publishBarsScore(student, payload)).resolves.toEqual({
-      published: true, semester: '2026/2027 осенний',
-      subjectCount: 2, scoreTotal: 160, averageScore: 80,
-      source: 'participant_submitted',
+      published: true, semester: 'Все семестры',
+      subjectCount: 2, scoreTotal: 430, totalWeight: 100, averageScore: 4.3,
+      metric:'weighted_control_grades_2_5', source: 'participant_submitted',
     });
     expect(submissions).toHaveLength(1);
     expect(submissions[0]).toEqual([
-      group, classmate, payload.semester, 80, 160, 2,
+      group, classmate, payload.semester, 4.3, 430, 100, 2,
     ]);
     await expect(api.publishBarsScore(student, {
       ...payload,
       subjects: [
-        {name: 'Математика', points: 80},
-        {name: 'Математика', points: 80},
+        {name: 'Математика', points: 4, weight: 25},
+        {name: 'Математика', points: 4, weight: 25},
       ],
     })).rejects.toBeInstanceOf(BadRequestException);
   });
@@ -213,14 +213,14 @@ describe('BARS attendance - verified group and review workflow', () => {
       return {affectedRows: 1};
     });
     const result = await api.publishBarsScore(verifiedStarosta, {
-      semester: '2026/2027 осенний',
-      subjects: [{name:'ТАУ', points: 83}],
+      semester: 'Все семестры',
+      subjects: [{name:'ТАУ', points: 5, weight: 20}],
     });
     expect(result).toMatchObject({
-      published: true, subjectCount: 1, scoreTotal: 83,
+      published: true, subjectCount: 1, scoreTotal: 100, averageScore: 5,
     });
     expect(query.mock.calls.some(([sql]) =>
-      String(sql).startsWith('INSERT INTO campus_grade_rankings'))).toBe(true);
+      String(sql).startsWith('INSERT INTO campus_weighted_grade_rankings'))).toBe(true);
     expect(query.mock.calls.some(([sql]) =>
       String(sql).includes('campus_attendance_roster_verified'))).toBe(false);
   });
@@ -236,23 +236,23 @@ describe('BARS attendance - verified group and review workflow', () => {
         expect(sql).toContain("r.group_name LIKE 'А-%'");
         return [{total: 39}];
       }
-      if (sql.startsWith('SELECT semester FROM campus_grade_rankings')) {
-        return [{semester:'2026/2027 осенний'}];
+      if (sql.startsWith('SELECT semester FROM campus_weighted_grade_rankings')) {
+        return [{semester:'Все семестры'}];
       }
-      if (sql.startsWith('SELECT gr.semester FROM campus_grade_rankings')) {
+      if (sql.startsWith('SELECT gr.semester FROM campus_weighted_grade_rankings')) {
         expect(sql).toContain("r.group_name LIKE 'А-%'");
-        return [{semester:'2026/2027 осенний'}];
+        return [{semester:'Все семестры'}];
       }
       if (sql.startsWith('SELECT gr.owner_key, gr.group_name')) {
         expect(sql).toContain("gr.semester=?");
-        expect(params).toEqual(['2026/2027 осенний']);
+        expect(params).toEqual(['Все семестры']);
         return [
           {owner_key:other, group_name:'А-01-23',
-            display_name:'Другой участник', average_score:90,
-            subject_count:4, score_total:360},
+            display_name:'Другой участник', average_score:4.8,
+            subject_count:4, score_total:480},
           {owner_key:classmate, group_name:group,
-            display_name:'Студент', average_score:80,
-            subject_count:2, score_total:160},
+            display_name:'Студент', average_score:4.3,
+            subject_count:2, score_total:430},
         ];
       }
       if (sql.startsWith('SELECT')) return [];
@@ -260,9 +260,10 @@ describe('BARS attendance - verified group and review workflow', () => {
     });
     const results = await api.barsScoresRanking(student, 'stream');
     expect(results).toMatchObject({
-      scope:'stream', group, semester:'2026/2027 осенний',
+      scope:'stream', group, semester:'Все семестры',
       total:39, participants:2, myPlace:2,
-      myAverage:80, published:true, source:'participant_submitted',
+      myAverage:4.3, published:true,
+      metric:'weighted_control_grades_2_5',source:'participant_submitted',
     });
     expect(results.entries.map((entry: any) => entry.place)).toEqual([1,2]);
     expect(JSON.stringify(results)).not.toContain(classmate);
@@ -281,11 +282,63 @@ describe('BARS attendance - verified group and review workflow', () => {
       return {affectedRows:1};
     });
     await expect(api.publishBarsScore(student, {
-      semester:'2026/2027 осенний',
-      subjects:[{name:'Физика', points:75}],
+      semester:'Все семестры',
+      subjects:[{name:'Физика', points:5, weight:20}],
     })).rejects.toBeInstanceOf(ForbiddenException);
     expect(query.mock.calls.some(([sql]) =>
-      String(sql).startsWith('INSERT INTO campus_grade_rankings'))).toBe(false);
+      String(sql).startsWith('INSERT INTO campus_weighted_grade_rankings'))).toBe(false);
+  });
+
+  test('server avatar upload saves byte content for only the current actor',
+    async () => {
+    const photo = Buffer.from([0xff,0xd8,0xff,0xe0,0,0,0,0]);
+    const actorWithRoster = {...actor,rosterLoginHash:'d'.repeat(64)};
+    const inserted: unknown[][] = [];
+    query.mockImplementation(async (sql: string,params?: unknown[]) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r'))
+        return [{owner_key: owner}];
+      if (sql.startsWith('INSERT INTO campus_profile_avatars')) {
+        inserted.push(params ?? []);
+        return {affectedRows:1};
+      }
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows:1};
+    });
+    const result = await api.uploadProfileAvatar(actorWithRoster, {
+      buffer:photo,
+    } as Express.Multer.File);
+    expect(result.saved).toBe(true);
+    expect(result.avatarId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0][0]).toBe(actor.ownerKey);
+    expect(inserted[0][2]).toBe(owner);
+    expect(inserted[0][4]).toBe('image/jpeg');
+    expect(inserted[0][5]).toEqual(photo);
+    await expect(api.uploadProfileAvatar(actorWithRoster,{
+      buffer:Buffer.from('not an image'),
+    } as Express.Multer.File)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  test('unweighted and invalid marks cannot be published',
+    async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r'))
+        return [{owner_key:classmate}];
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync'))
+        return [{student_count:13}];
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows:1};
+    });
+    for (const payload of [
+      [{name:'ТАУ', points:5, weight:0}],
+      [{name:'ТАУ', points:2.65, weight:40}],
+      [{name:'ТАУ', points:5, weight:101}],
+    ]) {
+      const rejected = api.publishBarsScore(student,{
+        semester:'Все семестры',subjects:payload,
+      });
+      await expect(rejected).rejects.toBeInstanceOf(BadRequestException);
+    }
   });
 
   test('personal ranking requires a verified imported roster and own identity',
