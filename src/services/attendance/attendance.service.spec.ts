@@ -163,8 +163,8 @@ describe('BARS attendance - verified group and review workflow', () => {
       if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r')) {
         return [{owner_key: classmate}];
       }
-      if (sql.startsWith('SELECT group_name FROM campus_attendance_roster_verified')) {
-        return [{group_name: group}];
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync')) {
+        return [{student_count: 2}];
       }
       if (sql.startsWith('INSERT INTO campus_grade_rankings')) {
         submissions.push(values);
@@ -196,6 +196,33 @@ describe('BARS attendance - verified group and review workflow', () => {
         {name: 'Математика', points: 80},
       ],
     })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  test('starosta with a legacy BARS roster import can publish without reimporting',
+    async () => {
+    const verifiedStarosta = {
+      ...actor, rosterLoginHash: 'd'.repeat(64),
+    };
+    query.mockImplementation(async (sql: string) => {
+      if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r'))
+        return [{owner_key: owner}];
+      // Historical app imports insert roster_sync, but not roster_verified.
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync'))
+        return [{student_count: 13}];
+      if (sql.startsWith('SELECT')) return [];
+      return {affectedRows: 1};
+    });
+    const result = await api.publishBarsScore(verifiedStarosta, {
+      semester: '2026/2027 осенний',
+      subjects: [{name:'ТАУ', points: 83}],
+    });
+    expect(result).toMatchObject({
+      published: true, subjectCount: 1, scoreTotal: 83,
+    });
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).startsWith('INSERT INTO campus_grade_rankings'))).toBe(true);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes('campus_attendance_roster_verified'))).toBe(false);
   });
 
   test('A-prefixed stream groups only and rank by submitted academic points',
@@ -244,11 +271,11 @@ describe('BARS attendance - verified group and review workflow', () => {
       .rejects.toBeInstanceOf(BadRequestException);
   });
 
-  test('unverified roster cannot publish grades', async () => {
+  test('no roster import cannot publish grades', async () => {
     query.mockImplementation(async (sql: string) => {
       if (sql.startsWith('SELECT r.owner_key FROM campus_attendance_roster r'))
         return [{owner_key:classmate}];
-      if (sql.startsWith('SELECT group_name FROM campus_attendance_roster_verified'))
+      if (sql.startsWith('SELECT student_count FROM campus_attendance_roster_sync'))
         return [];
       if (sql.startsWith('SELECT')) return [];
       return {affectedRows:1};

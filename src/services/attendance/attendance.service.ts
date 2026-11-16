@@ -234,14 +234,20 @@ export class AttendanceService {
         'Нет подтверждённой связи аккаунта со списком группы БАРС',
       );
     }
-    const verified = await this.db.query(
-      'SELECT group_name FROM campus_attendance_roster_verified ' +
-      'WHERE group_name=? AND source=? LIMIT 1',
-      [actor.group, 'backend_bars_verified'],
-    ) as Array<{group_name:string}>;
-    if (!verified.length) {
+    // A BARS-proven starosta may have imported the group through the
+    // earlier authenticated Flutter flow before server-side syncing existed.
+    // Such imports have a roster_sync row, but no roster_verified marker.
+    // The student's own active roster identity was already independently
+    // matched by ownRosterKey above. Do not demand a second import.
+    const imported = await this.db.query(
+      'SELECT student_count FROM campus_attendance_roster_sync ' +
+      'WHERE group_name=? ORDER BY id DESC LIMIT 1',
+      [actor.group],
+    ) as Array<{student_count: number|string}>;
+    if (imported.length !== 1 || Number(imported[0].student_count) < 1) {
       throw new ForbiddenException(
-        'Сначала староста должен загрузить проверенный список группы',
+        'Список группы ещё не загружен в CampusApp. ' +
+        'Попроси старосту открыть журнал и загрузить группу.',
       );
     }
     const semester = this.clean(dto.semester);
@@ -316,9 +322,9 @@ export class AttendanceService {
     const filterParams = stream ? [] : [actor.group];
     const [rosterCount] = await this.db.query(
       'SELECT COUNT(*) AS total FROM campus_attendance_roster r ' +
-      'JOIN campus_attendance_roster_verified v ' +
-      "ON v.group_name=r.group_name AND v.source='backend_bars_verified' " +
-      'WHERE r.active=1 AND ' + groupFilter,
+      'WHERE r.active=1 AND EXISTS (' +
+      'SELECT 1 FROM campus_attendance_roster_sync rs ' +
+      'WHERE rs.group_name=r.group_name) AND ' + groupFilter,
       filterParams,
     ) as Array<{total:number|string}>;
     const ownRows = mine ? await this.db.query(
@@ -330,9 +336,9 @@ export class AttendanceService {
       'SELECT gr.semester FROM campus_grade_rankings gr ' +
       'JOIN campus_attendance_roster r ON r.group_name=gr.group_name ' +
       'AND r.owner_key=gr.owner_key AND r.active=1 ' +
-      'JOIN campus_attendance_roster_verified v ' +
-      "ON v.group_name=r.group_name AND v.source='backend_bars_verified' " +
-      'WHERE ' + groupFilter + ' ORDER BY gr.updated_at DESC LIMIT 1',
+      'WHERE EXISTS (SELECT 1 FROM campus_attendance_roster_sync rs ' +
+      'WHERE rs.group_name=r.group_name) AND ' + groupFilter +
+      ' ORDER BY gr.updated_at DESC LIMIT 1',
       filterParams,
     ) as Array<{semester:string}>;
     const semester = ownRows[0]?.semester ?? newest[0]?.semester ?? null;
@@ -346,9 +352,9 @@ export class AttendanceService {
       'FROM campus_grade_rankings gr JOIN campus_attendance_roster r ' +
       'ON r.group_name=gr.group_name AND r.owner_key=gr.owner_key ' +
       'AND r.active=1 ' +
-      'JOIN campus_attendance_roster_verified v ' +
-      "ON v.group_name=r.group_name AND v.source='backend_bars_verified' " +
       'WHERE gr.semester=? AND ' + groupFilter +
+      ' AND EXISTS (SELECT 1 FROM campus_attendance_roster_sync rs ' +
+      'WHERE rs.group_name=r.group_name) ' +
       ' ORDER BY gr.average_score DESC, gr.owner_key ASC LIMIT 5000',
       [semester, ...filterParams],
     ) as Array<{
