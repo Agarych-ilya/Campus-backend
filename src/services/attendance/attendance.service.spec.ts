@@ -331,7 +331,7 @@ describe('BARS attendance - verified group and review workflow', () => {
     });
     for (const payload of [
       [{name:'ТАУ', points:5, weight:0}],
-      [{name:'ТАУ', points:2.65, weight:40}],
+      [{name:'ТАУ', points:5.65, weight:40}],
       [{name:'ТАУ', points:5, weight:101}],
     ]) {
       const rejected = api.publishBarsScore(student,{
